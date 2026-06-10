@@ -32,8 +32,15 @@
 - [x] 동시성 테스트 (ingest/search/swap 3-스레드) + E2E 로그 이상 탐지 테스트
 - [x] 테스트 12/12 통과
 
-## Phase 3 예정 (다음 세션)
-- [ ] WAL 장애 복구 로직 (재시작 시 청크 로드)
-- [ ] 시간 청크 관리 (1시간 단위 생성, 보존 기한 만료 시 OS unlink)
-- [ ] HTTP/gRPC 인터페이스 (삽입/검색)
-- [ ] 10초 주기 스왑 백그라운드 스레드 (데몬 런타임)
+## Phase 3: Persistence & API
+- [x] WAL 장애 복구 (wal.rs — append/rotate/replay, 불완전 꼬리 무시, 크래시 복구 테스트)
+- [x] 시간 청크 관리 (chunks.rs — hour-N 디렉터리, 만료 시 OS unlink sweep)
+- [x] 엔진 조립 (engine.rs — WAL→인덱싱 직렬화, 링 병합 검색, 자동 캘리브레이션 후 동결)
+- [x] HTTP API (http.rs — POST /logs, POST /search, GET /stats, tiny_http 워커 풀)
+- [x] 서버 데몬 (main.rs — 10초 스왑 틱 + 1시간 sweep, env 설정)
+- [x] 테스트 19/19 통과 + 릴리스 바이너리 스모크 런 (스왑 데몬·검색·청크·WAL 로테이트 실증)
+
+## 향후 (스펙 외 개선 후보)
+- [ ] gRPC 인터페이스 (스펙 병기 항목 — 필요 시 동일 엔진 위에 추가)
+- [ ] 디스크 세그먼트 대상 이력 검색 (링 범위 초과 시간대)
+- [ ] Stateless Embedder 횡적 확장 (§4.3 — 임베딩 워커 분리 배포)
