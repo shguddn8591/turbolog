@@ -69,15 +69,29 @@ impl PingPongIndexer {
         self.write.lock().unwrap().len()
     }
 
+    /// Seals the active write window and hands it to the caller. The write lock is held
+    /// only for a `mem::replace` (microseconds) — `prepare()` and disk flushes must happen
+    /// outside, then the sealed index is made searchable via [`Self::publish`].
+    pub fn seal(&self) -> Result<IdMapIndex> {
+        let fresh = IdMapIndex::new(self.dim, self.bit_width)?;
+        let mut guard = self.write.lock().unwrap();
+        Ok(std::mem::replace(&mut *guard, fresh))
+    }
+
+    /// Atomically publishes a sealed index as the active search snapshot.
+    pub fn publish(&self, sealed: Arc<IdMapIndex>) {
+        self.search.store(sealed);
+    }
+
     /// Invoked periodically by the background thread.
     /// Seals the active write index, atomically publishes it as the search snapshot,
     /// and flushes the sealed window to disk as a `.tvim` chunk if `flush_path` is provided.
+    ///
+    /// Convenience wrapper over [`Self::seal`] + [`Self::publish`]. Note that the disk
+    /// flush happens outside the write lock, but callers needing WAL-coordinated sealing
+    /// (see `engine::swap_tick`) should use `seal`/`publish` directly.
     pub fn swap_and_flush(&self, flush_path: Option<&Path>) -> Result<()> {
-        let fresh = IdMapIndex::new(self.dim, self.bit_width)?;
-        let sealed = {
-            let mut guard = self.write.lock().unwrap();
-            std::mem::replace(&mut *guard, fresh)
-        };
+        let sealed = self.seal()?;
         // Pre-compute the search cache (rotation matrix, SIMD layout) before publishing to the snapshot
         // to prevent latency spikes for the first search query.
         sealed.prepare();

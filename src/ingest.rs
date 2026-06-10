@@ -147,48 +147,55 @@ impl Embedder {
     }
 }
 
-/// Template ID to vector LRU cache. Avoids embedding overhead via O(1) lookups, falling back to ONNX inference on cache misses.
-pub struct VectorCache {
+/// Drain parser + template-vector LRU cache, WITHOUT an embedder.
+///
+/// Separating the cheap path (parse + O(1) lookup, microseconds) from the expensive path
+/// (ONNX inference, milliseconds) lets callers hold this under a short-lived lock while
+/// running embeddings outside of it — a cache-miss storm then no longer blocks the
+/// cache-hit ingest path (see `engine::ingest_log`).
+pub struct TemplateCache {
     parser: TemplateParser,
     cache: LruCache<u64, Arc<[f32]>>,
-    embedder: Embedder,
     hits: u64,
     misses: u64,
 }
 
-impl VectorCache {
+impl TemplateCache {
     /// Minimum specification threshold — scales with `with_capacity` based on memory availability.
     pub const DEFAULT_CAPACITY: usize = 10_000;
 
-    pub fn new(embedder: Embedder) -> Self {
-        Self::with_capacity(embedder, Self::DEFAULT_CAPACITY)
+    pub fn new() -> Self {
+        Self::with_capacity(Self::DEFAULT_CAPACITY)
     }
 
-    pub fn with_capacity(embedder: Embedder, capacity: usize) -> Self {
+    pub fn with_capacity(capacity: usize) -> Self {
         Self {
             parser: TemplateParser::new(),
             cache: LruCache::new(NonZeroUsize::new(capacity.max(1)).unwrap()),
-            embedder,
             hits: 0,
             misses: 0,
         }
     }
 
-    pub fn get_or_embed(&mut self, log: &str) -> Result<(ParsedLog, Arc<[f32]>)> {
+    /// Parses the line and looks up the template vector. `None` means a cache miss —
+    /// the caller should embed `parsed.template` and store it via [`Self::insert`].
+    pub fn parse_and_lookup(&mut self, log: &str) -> (ParsedLog, Option<Arc<[f32]>>) {
         let parsed = self.parser.parse(log);
-        if let Some(vector) = self.cache.get(&parsed.template_id) {
-            self.hits += 1;
-            return Ok((parsed, Arc::clone(vector)));
+        match self.cache.get(&parsed.template_id) {
+            Some(vector) => {
+                self.hits += 1;
+                let vector = Arc::clone(vector);
+                (parsed, Some(vector))
+            }
+            None => {
+                self.misses += 1;
+                (parsed, None)
+            }
         }
-        self.misses += 1;
-        let vector: Arc<[f32]> = self.embedder.embed(&parsed.template)?.into();
-        self.cache.put(parsed.template_id, Arc::clone(&vector));
-        Ok((parsed, vector))
     }
 
-    /// Embeds a search query — queries bypass the LRU cache since they are not templates.
-    pub fn embed_uncached(&mut self, text: &str) -> Result<Vec<f32>> {
-        self.embedder.embed(text)
+    pub fn insert(&mut self, template_id: u64, vector: Arc<[f32]>) {
+        self.cache.put(template_id, vector);
     }
 
     pub fn hits(&self) -> u64 {
@@ -206,6 +213,63 @@ impl VectorCache {
         } else {
             self.hits as f64 / total as f64
         }
+    }
+}
+
+impl Default for TemplateCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Template ID to vector LRU cache. Avoids embedding overhead via O(1) lookups, falling back to ONNX inference on cache misses.
+///
+/// Single-threaded convenience wrapper bundling [`TemplateCache`] with one [`Embedder`].
+/// Concurrent pipelines (`TurboLogEngine`) use the two parts separately instead.
+pub struct VectorCache {
+    templates: TemplateCache,
+    embedder: Embedder,
+}
+
+impl VectorCache {
+    pub const DEFAULT_CAPACITY: usize = TemplateCache::DEFAULT_CAPACITY;
+
+    pub fn new(embedder: Embedder) -> Self {
+        Self::with_capacity(embedder, Self::DEFAULT_CAPACITY)
+    }
+
+    pub fn with_capacity(embedder: Embedder, capacity: usize) -> Self {
+        Self {
+            templates: TemplateCache::with_capacity(capacity),
+            embedder,
+        }
+    }
+
+    pub fn get_or_embed(&mut self, log: &str) -> Result<(ParsedLog, Arc<[f32]>)> {
+        let (parsed, cached) = self.templates.parse_and_lookup(log);
+        if let Some(vector) = cached {
+            return Ok((parsed, vector));
+        }
+        let vector: Arc<[f32]> = self.embedder.embed(&parsed.template)?.into();
+        self.templates.insert(parsed.template_id, Arc::clone(&vector));
+        Ok((parsed, vector))
+    }
+
+    /// Embeds a search query — queries bypass the LRU cache since they are not templates.
+    pub fn embed_uncached(&mut self, text: &str) -> Result<Vec<f32>> {
+        self.embedder.embed(text)
+    }
+
+    pub fn hits(&self) -> u64 {
+        self.templates.hits()
+    }
+
+    pub fn misses(&self) -> u64 {
+        self.templates.misses()
+    }
+
+    pub fn hit_rate(&self) -> f64 {
+        self.templates.hit_rate()
     }
 }
 

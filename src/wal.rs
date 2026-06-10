@@ -75,6 +75,44 @@ impl Wal {
         Ok(())
     }
 
+    /// Detaches the current WAL as a sealed file (rename) and reopens a fresh active WAL.
+    /// Only metadata operations happen here (flush + rename + create) — safe to call under
+    /// the write-path lock without stalling ingestion.
+    ///
+    /// The returned sealed file must be deleted by the caller only AFTER the corresponding
+    /// `.tvim` segment has been durably written. If the process crashes in between, the
+    /// sealed file is picked up by `sealed_leftovers` + `replay` on the next startup.
+    pub fn detach_sealed(&mut self) -> Result<PathBuf> {
+        self.writer.flush()?;
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let sealed_path = self.path.with_file_name(format!("wal-sealed-{nanos}.bin"));
+        std::fs::rename(&self.path, &sealed_path)
+            .with_context(|| format!("Failed to detach WAL to {}", sealed_path.display()))?;
+        *self = Self::open(&self.path, self.dim)?;
+        Ok(sealed_path)
+    }
+
+    /// Lists leftover `wal-sealed-*.bin` files in `dir` (crash residue), oldest first.
+    pub fn sealed_leftovers(dir: &Path) -> Result<Vec<PathBuf>> {
+        let mut files: Vec<PathBuf> = match std::fs::read_dir(dir) {
+            Ok(entries) => entries
+                .filter_map(|e| e.ok())
+                .map(|e| e.path())
+                .filter(|p| {
+                    p.file_name()
+                        .and_then(|n| n.to_str())
+                        .is_some_and(|n| n.starts_with("wal-sealed-") && n.ends_with(".bin"))
+                })
+                .collect(),
+            Err(_) => Vec::new(),
+        };
+        files.sort();
+        Ok(files)
+    }
+
     /// Replay Recovery: Reads all complete records from the WAL file. Returns an empty list if the file is absent.
     /// Trailing records that are partially written are ignored as crash residue.
     pub fn replay(path: impl AsRef<Path>, dim: usize) -> Result<Vec<(u64, Vec<f32>)>> {

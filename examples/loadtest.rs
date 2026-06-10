@@ -71,7 +71,7 @@ fn main() -> anyhow::Result<()> {
         ..EngineConfig::default()
     };
     let embedder = Embedder::new(models.join("model.onnx"), models.join("tokenizer.json"))?;
-    let engine = Arc::new(TurboLogEngine::open(cfg, embedder)?);
+    let engine = Arc::new(TurboLogEngine::open(cfg, vec![embedder])?);
 
     // 워밍업: 템플릿 캐시 + 캘리브레이션
     for i in 0..TEMPLATES * 3 {
@@ -199,6 +199,47 @@ fn main() -> anyhow::Result<()> {
             "[5] HTTP /logs (4 클라이언트, 배치 {batch}): {:.0} logs/s ({:.0} req/s)",
             total_logs as f64 / el.as_secs_f64(),
             (4 * reqs_per_thread) as f64 / el.as_secs_f64()
+        );
+    }
+
+    // ── 6) 미스 폭풍 내성: 신규 템플릿 폭주 중 적중 경로 처리량 ──
+    // 수정 전에는 캐시 락이 ONNX 추론까지 직렬화해 적중 경로도 ~136 logs/s로 붕괴했다.
+    {
+        let stop = Arc::new(AtomicBool::new(false));
+        let storm = {
+            let engine = Arc::clone(&engine);
+            let stop = Arc::clone(&stop);
+            std::thread::spawn(move || {
+                let mut embedded = 0u64;
+                // 토큰 수가 모두 다른 고유 패턴 → 강제 캐시 미스 연속
+                for i in 0..400 {
+                    if stop.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    let words: Vec<String> =
+                        (0..(3 + i % 120)).map(|j| format!("storm{i}tok{j}")).collect();
+                    engine.ingest_log(&words.join(" ")).unwrap();
+                    embedded += 1;
+                }
+                embedded
+            })
+        };
+
+        // 폭풍이 도는 동안 적중 경로 처리량 측정 (2초간)
+        std::thread::sleep(Duration::from_millis(100)); // 폭풍 워밍업
+        let t = Instant::now();
+        let mut hits = 0u64;
+        while t.elapsed() < Duration::from_secs(2) {
+            engine.ingest_log(&make_log(hits as usize))?;
+            hits += 1;
+        }
+        let el = t.elapsed();
+        stop.store(true, Ordering::Relaxed);
+        let storm_count = storm.join().unwrap();
+        println!(
+            "[6] 미스 폭풍 내성: 적중 경로 {:.0} logs/s (폭풍 중 신규 템플릿 {}건 처리)",
+            hits as f64 / el.as_secs_f64(),
+            storm_count
         );
     }
 

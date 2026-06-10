@@ -44,7 +44,7 @@ fn wal_crash_recovery() {
     // 1) 인입 후 스왑 없이 종료 (크래시 시뮬레이션 — WAL에만 존재)
     {
         let engine =
-            TurboLogEngine::open(test_config(data_dir.clone()), make_embedder(&models)).unwrap();
+            TurboLogEngine::open(test_config(data_dir.clone()), vec![make_embedder(&models)]).unwrap();
         for i in 0..7 {
             engine
                 .ingest_log(&format!("payment failed for order {i} with code 502"))
@@ -56,7 +56,7 @@ fn wal_crash_recovery() {
 
     // 2) 재기동 → WAL 재생으로 쓰기 윈도우 복원
     let engine =
-        TurboLogEngine::open(test_config(data_dir.clone()), make_embedder(&models)).unwrap();
+        TurboLogEngine::open(test_config(data_dir.clone()), vec![make_embedder(&models)]).unwrap();
     assert_eq!(engine.stats().pending_window_len, 7, "WAL 재생 복구");
 
     // 3) 봉인 후 검색 가능 + WAL은 로테이트되어 비어 있음
@@ -87,7 +87,7 @@ fn ring_merges_multiple_windows() {
     };
     let data_dir = temp_data_dir("ring");
     let engine =
-        TurboLogEngine::open(test_config(data_dir.clone()), make_embedder(&models)).unwrap();
+        TurboLogEngine::open(test_config(data_dir.clone()), vec![make_embedder(&models)]).unwrap();
 
     // 윈도우 1: 디스크 경고 / 윈도우 2: 네트워크 타임아웃
     let disk = engine
@@ -124,7 +124,7 @@ fn auto_calibration_then_detection() {
     };
     let data_dir = temp_data_dir("calib");
     let engine =
-        TurboLogEngine::open(test_config(data_dir.clone()), make_embedder(&models)).unwrap();
+        TurboLogEngine::open(test_config(data_dir.clone()), vec![make_embedder(&models)]).unwrap();
 
     assert!(!engine.stats().detector_calibrated);
     // 정상 템플릿 5종 → calibration_templates=5 도달 시 자동 동결
@@ -172,7 +172,7 @@ fn http_api_end_to_end() {
     };
     let data_dir = temp_data_dir("http");
     let engine = Arc::new(
-        TurboLogEngine::open(test_config(data_dir.clone()), make_embedder(&models)).unwrap(),
+        TurboLogEngine::open(test_config(data_dir.clone()), vec![make_embedder(&models)]).unwrap(),
     );
     let (addr, _handles) = run_server(Arc::clone(&engine), "127.0.0.1:0", 2).unwrap();
     let base = format!("http://{addr}");
@@ -218,5 +218,46 @@ fn http_api_end_to_end() {
         ureq::Error::Status(code, _) => assert_eq!(code, 400),
         other => panic!("400 응답이어야 함: {other}"),
     }
+    std::fs::remove_dir_all(&data_dir).ok();
+}
+
+#[test]
+fn sealed_wal_leftover_recovery() {
+    // 크래시 시나리오: 봉인(WAL detach) 직후, 세그먼트 백업 완료 전에 프로세스 사망.
+    // 잔여 wal-sealed-*.bin이 재기동 시 재생·통합되어야 한다.
+    let Some(models) = models_dir() else {
+        eprintln!("skip: models/ 없음");
+        return;
+    };
+    let data_dir = temp_data_dir("sealed_leftover");
+    {
+        let engine =
+            TurboLogEngine::open(test_config(data_dir.clone()), vec![make_embedder(&models)])
+                .unwrap();
+        for i in 0..4 {
+            engine
+                .ingest_log(&format!("replica lag {i} ms on shard primary"))
+                .unwrap();
+        }
+        // drop — 스왑 없이 종료
+    }
+    // 봉인 직후 크래시 흉내: 활성 WAL을 sealed 파일로 rename만 해 둔다
+    std::fs::rename(
+        data_dir.join("wal.bin"),
+        data_dir.join("wal-sealed-99.bin"),
+    )
+    .unwrap();
+
+    let engine =
+        TurboLogEngine::open(test_config(data_dir.clone()), vec![make_embedder(&models)]).unwrap();
+    assert_eq!(engine.stats().pending_window_len, 4, "sealed 잔여물 복구");
+    // 통합 후: 잔여 파일은 사라지고 활성 WAL에 4건이 재영속화됨
+    assert!(!data_dir.join("wal-sealed-99.bin").exists());
+    assert_eq!(
+        turbolog::Wal::replay(data_dir.join("wal.bin"), 384)
+            .unwrap()
+            .len(),
+        4
+    );
     std::fs::remove_dir_all(&data_dir).ok();
 }

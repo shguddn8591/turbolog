@@ -2,7 +2,8 @@
 //!
 //! TurboLog Server Daemon.
 //!
-//! Environment Variables: TURBOLOG_PORT (default: 8087), TURBOLOG_DATA_DIR (default: ./data), TURBOLOG_MODEL_DIR (default: ./models)
+//! Environment Variables: TURBOLOG_PORT (default: 8087), TURBOLOG_DATA_DIR (default: ./data),
+//! TURBOLOG_MODEL_DIR (default: ./models), TURBOLOG_EMBEDDERS (default: 2)
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -24,11 +25,17 @@ fn main() -> anyhow::Result<()> {
         ..EngineConfig::default()
     };
 
-    let embedder = Embedder::new(
-        model_dir.join("model.onnx"),
-        model_dir.join("tokenizer.json"),
-    )?;
-    let engine = Arc::new(TurboLogEngine::open(cfg, embedder)?);
+    // Embedder pool: bounds parallel cache-miss inference (each slot ≈ 90 MB ONNX session).
+    let pool_size: usize = env_or("TURBOLOG_EMBEDDERS", "2").parse().unwrap_or(2).max(1);
+    let embedders = (0..pool_size)
+        .map(|_| {
+            Embedder::new(
+                model_dir.join("model.onnx"),
+                model_dir.join("tokenizer.json"),
+            )
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    let engine = Arc::new(TurboLogEngine::open(cfg, embedders)?);
 
     // Swap Daemon: Seals window every 10s + unlinks expired retention chunks every hour
     {
