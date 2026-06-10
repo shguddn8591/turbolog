@@ -84,7 +84,10 @@ impl Wal {
         }
         let mut file = File::open(path)?;
         let file_dim = read_header(&mut file)?;
-        ensure!(file_dim == dim, "WAL dim 불일치: 파일 {file_dim}, 요청 {dim}");
+        ensure!(
+            file_dim == dim,
+            "WAL dim 불일치: 파일 {file_dim}, 요청 {dim}"
+        );
 
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes)?;

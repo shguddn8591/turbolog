@@ -202,8 +202,7 @@ impl TurboLogEngine {
     pub fn search_text(&self, query: &str, k: usize) -> Result<Vec<SearchHit>> {
         ensure!(k > 0, "k는 1 이상");
         let vector = self.cache.lock().unwrap().embed_uncached(query)?;
-        let windows: Vec<Arc<IdMapIndex>> =
-            self.ring.lock().unwrap().iter().cloned().collect();
+        let windows: Vec<Arc<IdMapIndex>> = self.ring.lock().unwrap().iter().cloned().collect();
 
         let mut hits: Vec<SearchHit> = Vec::new();
         for window in windows {

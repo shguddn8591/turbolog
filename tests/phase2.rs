@@ -10,10 +10,14 @@ const DIM: usize = 32;
 
 /// 결정적 의사난수 단위 벡터 (LCG).
 fn unit_vector(seed: u64) -> Vec<f32> {
-    let mut state = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+    let mut state = seed
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(1442695040888963407);
     let mut v: Vec<f32> = (0..DIM)
         .map(|_| {
-            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             ((state >> 33) as f32 / (1u64 << 31) as f32) - 1.0
         })
         .collect();
@@ -48,7 +52,11 @@ fn swap_publishes_sealed_window() {
     // 다음 윈도우는 빈 쓰기 인덱스에서 시작
     indexer.ingest(100, &unit_vector(100)).unwrap();
     indexer.swap_and_flush(None).unwrap();
-    assert_eq!(indexer.get_search_index().len(), 1, "윈도우 의미론: 직전 윈도우만");
+    assert_eq!(
+        indexer.get_search_index().len(),
+        1,
+        "윈도우 의미론: 직전 윈도우만"
+    );
 }
 
 #[test]

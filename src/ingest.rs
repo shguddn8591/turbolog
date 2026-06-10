@@ -225,7 +225,10 @@ mod tests {
         let mut parser = TemplateParser::new();
         let a = parser.parse("Node 2 is online");
         let b = parser.parse("Node 4 is online");
-        assert_eq!(a.template_id, b.template_id, "변수만 다른 로그는 같은 템플릿");
+        assert_eq!(
+            a.template_id, b.template_id,
+            "변수만 다른 로그는 같은 템플릿"
+        );
         assert_eq!(a.raw_message, "Node 2 is online");
     }
 

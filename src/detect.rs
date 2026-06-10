@@ -51,7 +51,7 @@ impl AnomalyDetector {
     /// 정상 군집 중심점을 학습한 뒤 동결한다. `normal_vectors`는 n×dim 평탄 배열.
     pub fn fit(normal_vectors: &[f32], dim: usize, k: usize, anomaly_threshold: f32) -> Self {
         assert!(dim > 0 && !normal_vectors.is_empty());
-        assert!(normal_vectors.len() % dim == 0, "n×dim 평탄 배열이어야 함");
+        assert!(normal_vectors.len().is_multiple_of(dim), "n×dim 평탄 배열이어야 함");
         let n = normal_vectors.len() / dim;
         let k = k.clamp(1, n);
         let row = |i: usize| &normal_vectors[i * dim..(i + 1) * dim];
@@ -60,7 +60,7 @@ impl AnomalyDetector {
         let mut centroids: Vec<Vec<f32>> = (0..k).map(|c| row(c * n / k).to_vec()).collect();
         let mut assignment = vec![0usize; n];
         for _ in 0..16 {
-            for i in 0..n {
+            for (i, assign) in assignment.iter_mut().enumerate().take(n) {
                 let mut best = (f32::INFINITY, 0usize);
                 for (c, centroid) in centroids.iter().enumerate() {
                     let d = euclidean(row(i), centroid);
@@ -68,7 +68,7 @@ impl AnomalyDetector {
                         best = (d, c);
                     }
                 }
-                assignment[i] = best.1;
+                *assign = best.1;
             }
             let mut sums = vec![vec![0f32; dim]; k];
             let mut counts = vec![0usize; k];
@@ -131,7 +131,11 @@ fn tier2_context(vector: &[f32], index: &IdMapIndex, allowlist: Option<&[u64]>) 
     match allowlist {
         Some(ids) => {
             // search_with_allowlist는 빈 목록·미존재 ID에 panic — 사전 필터링 필수
-            let present: Vec<u64> = ids.iter().copied().filter(|&id| index.contains(id)).collect();
+            let present: Vec<u64> = ids
+                .iter()
+                .copied()
+                .filter(|&id| index.contains(id))
+                .collect();
             if present.is_empty() {
                 return Vec::new();
             }
@@ -157,7 +161,13 @@ mod tests {
             data.extend_from_slice(&[0.0, 0.0, 1.0, eps]);
         }
         let det = AnomalyDetector::fit(&data, 4, 2, 0.5);
-        assert!(det.min_distance(&[1.0, 0.0, 0.0, 0.0]) < 0.2, "군집 내부는 가까움");
-        assert!(det.min_distance(&[-1.0, 0.0, 0.0, 0.0]) > 1.0, "반대 방향은 멀어짐");
+        assert!(
+            det.min_distance(&[1.0, 0.0, 0.0, 0.0]) < 0.2,
+            "군집 내부는 가까움"
+        );
+        assert!(
+            det.min_distance(&[-1.0, 0.0, 0.0, 0.0]) > 1.0,
+            "반대 방향은 멀어짐"
+        );
     }
 }

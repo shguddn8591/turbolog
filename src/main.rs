@@ -22,7 +22,10 @@ fn main() -> anyhow::Result<()> {
         ..EngineConfig::default()
     };
 
-    let embedder = Embedder::new(model_dir.join("model.onnx"), model_dir.join("tokenizer.json"))?;
+    let embedder = Embedder::new(
+        model_dir.join("model.onnx"),
+        model_dir.join("tokenizer.json"),
+    )?;
     let engine = Arc::new(TurboLogEngine::open(cfg, embedder)?);
 
     // 스왑 데몬: 10초 주기 봉인 + 1시간마다 보존 만료 청크 unlink

@@ -22,6 +22,7 @@
 - [x] 통합 테스트: 합성 로그 100건 → 384차원 L2≈1.0, 히트율 95.0% (hits=95, misses=5)
 - [x] cargo build 경고 없음 + cargo test 전체 통과 (5/5)
 - [x] README.md + 첫 커밋
+- [x] GitHub Actions 고급 CI 파이프라인 구축 (Lint, 매트릭스 OS 테스트, Security Audit, Code Coverage)
 
 ## Phase 2: Ping-Pong & Centroid
 - [x] PingPongIndexer 구현 (쓰기 Mutex + ArcSwap 스냅샷 읽기, swap_and_flush)

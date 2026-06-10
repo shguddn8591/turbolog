@@ -14,11 +14,17 @@ fn models_dir() -> Option<PathBuf> {
 fn synthetic_logs() -> Vec<String> {
     let mut logs = Vec::new();
     for i in 0..20 {
-        logs.push(format!("connection accepted from 10.0.0.{i} port {}", 5000 + i));
+        logs.push(format!(
+            "connection accepted from 10.0.0.{i} port {}",
+            5000 + i
+        ));
         logs.push(format!("user u{i} login success from web console"));
         logs.push(format!("disk usage at {} percent on /var", 50 + i));
         logs.push(format!("request to /api/v1/items took {} ms", 10 * i + 3));
-        logs.push(format!("worker {i} heartbeat ok at epoch {}", 1700000000 + i));
+        logs.push(format!(
+            "worker {i} heartbeat ok at epoch {}",
+            1700000000 + i
+        ));
     }
     logs
 }
@@ -73,7 +79,10 @@ fn cache_hit_skips_embedding() {
     let (a, va) = cache.get_or_embed("Node 2 is online").unwrap();
     assert_eq!(cache.misses(), 1);
     let (b, vb) = cache.get_or_embed("Node 7 is online").unwrap();
-    assert_eq!(a.template_id, b.template_id, "변수만 다른 로그는 같은 템플릿");
+    assert_eq!(
+        a.template_id, b.template_id,
+        "변수만 다른 로그는 같은 템플릿"
+    );
     assert_eq!(cache.hits(), 1, "두 번째 인입은 캐시 히트");
     assert_eq!(cache.misses(), 1, "임베딩 추가 호출 없음");
     assert!(std::sync::Arc::ptr_eq(&va, &vb), "동일 캐시 엔트리 공유");
@@ -110,7 +119,9 @@ fn end_to_end_anomaly_detection() {
     let detector = AnomalyDetector::fit(&normal_flat, 384, 5, 0.5);
 
     // 3) 정상 로그 재인입 → Tier 1 즉시 통과
-    let (_p, v) = cache.get_or_embed("disk usage at 77 percent on /var").unwrap();
+    let (_p, v) = cache
+        .get_or_embed("disk usage at 77 percent on /var")
+        .unwrap();
     assert!(
         matches!(detector.detect(&v, &snapshot), DetectionResult::Normal),
         "기존 템플릿 로그는 Normal"

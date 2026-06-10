@@ -1,0 +1,259 @@
+name: TurboLog CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  schedule:
+    # 매주 일요일 00:00 UTC — 의존성 깨짐 조기 감지
+    - cron: '0 0 * * 0'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true # 같은 브랜치의 이전 실행은 취소하여 자원 절약
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  # ONNX 모델 캐시 키 (모델 URL이 바뀌면 같이 갱신)
+  MODEL_CACHE_KEY: onnx-minilm-v2-rev1
+
+# ─────────────────────────── Jobs ───────────────────────────
+
+jobs:
+
+  # ① Lint & Format ─────────────────────────────────────────
+  lint:
+    name: Lint & Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Restore ONNX model cache
+        uses: actions/cache@v4
+        with:
+          path: models/
+          key: ${{ env.MODEL_CACHE_KEY }}
+
+      - name: Download ONNX models (if not cached)
+        run: bash scripts/download_model.sh
+
+      - name: rustfmt
+        run: cargo fmt --all -- --check
+
+      - name: clippy (all targets)
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Check for TODO/FIXME in src
+        run: |
+          echo "::group::TODO/FIXME markers"
+          grep -rn 'TODO\|FIXME\|HACK\|XXX' src/ || echo "✅ Clean — no TODO markers found"
+          echo "::endgroup::"
+
+  # ② Unit Tests (크로스 플랫폼) ─────────────────────────────
+  test:
+    name: Test (${{ matrix.os }}, rust-${{ matrix.rust }})
+    needs: lint
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, macos-latest ]
+        rust: [ stable, beta ]
+        exclude:
+          # beta는 ubuntu에서만 검증 — macOS beta는 비용 대비 가치 낮음
+          - os: macos-latest
+            rust: beta
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (${{ matrix.rust }})
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust }}
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.os }}-${{ matrix.rust }}
+
+      - name: Restore ONNX model cache
+        uses: actions/cache@v4
+        with:
+          path: models/
+          key: ${{ env.MODEL_CACHE_KEY }}
+
+      - name: Download ONNX models (if not cached)
+        run: bash scripts/download_model.sh
+
+      - name: Build (check compilation)
+        run: cargo build --all-features
+
+      - name: Run unit tests
+        run: cargo test --lib --all-features
+
+      - name: Run integration tests
+        run: cargo test --tests --all-features
+        env:
+          RUST_LOG: turbolog=debug
+
+      - name: Run doc tests
+        run: cargo test --doc
+
+  # ③ MSRV — 최소 지원 Rust 버전 검증 ───────────────────────
+  msrv:
+    name: MSRV (edition 2021)
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust 1.70.0 (edition 2021 MSRV)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.70.0"
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: msrv
+
+      - name: Check compilation
+        run: cargo check --all-features
+
+  # ④ Security Audit ────────────────────────────────────────
+  audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Audit dependencies
+        uses: rustsec/audit-check@v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  # ⑤ Code Coverage ────────────────────────────────────────
+  coverage:
+    name: Code Coverage
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: coverage
+
+      - name: Restore ONNX model cache
+        uses: actions/cache@v4
+        with:
+          path: models/
+          key: ${{ env.MODEL_CACHE_KEY }}
+
+      - name: Download ONNX models (if not cached)
+        run: bash scripts/download_model.sh
+
+      - name: Generate coverage (LCOV)
+        run: cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
+
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: lcov.info
+          fail_ci_if_error: false
+
+      - name: Coverage summary (inline)
+        run: cargo llvm-cov --all-features --workspace --text | head -60
+
+  # ⑥ Leak / UB Sanitizer (Miri) ───────────────────────────
+  miri:
+    name: Miri (UB detection)
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust nightly + Miri
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: miri
+
+      # Miri는 FFI(ort, turbovec C 바인딩)를 실행할 수 없으므로
+      # 순수 Rust 유닛 테스트만 실행한다.
+      - name: Run Miri on pure-Rust unit tests
+        run: |
+          cargo miri test --lib -- \
+            fnv1a64_deterministic \
+            different_pattern_different_template_id \
+            same_pattern_same_template_id \
+            fit_two_clusters_and_min_distance \
+            append_replay_rotate \
+            truncated_tail_ignored \
+            segment_layout_and_sweep
+        env:
+          MIRIFLAGS: -Zmiri-disable-isolation
+
+  # ⑦ Binary build check (release profile) ──────────────────
+  release-build:
+    name: Release Build
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: release
+
+      - name: Restore ONNX model cache
+        uses: actions/cache@v4
+        with:
+          path: models/
+          key: ${{ env.MODEL_CACHE_KEY }}
+
+      - name: Download ONNX models (if not cached)
+        run: bash scripts/download_model.sh
+
+      - name: Build release binary
+        run: cargo build --release --all-features
+
+      - name: Verify binary runs (--help or quick smoke)
+        run: |
+          # 바이너리가 정상 링크되었는지 확인
+          file target/release/turbolog
+          ls -lh target/release/turbolog
+
+      - name: Upload release binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: turbolog-linux-amd64
+          path: target/release/turbolog
+          retention-days: 7
