@@ -1,10 +1,9 @@
-//! Ingestion & Cache Layer — 텍스트 로그를 벡터로 변환하는 관문.
+//! Ingestion & Cache Layer — Gateway for transforming raw text logs into vectors.
 //!
-//! Cache Hit 시 임베딩 연산 비용 0, Cache Miss 시에만 CPU(ONNX) 추론을 수행한다.
+//! Cache hits bypass embedding computation completely (cost: 0). Cache misses trigger CPU (ONNX) model inference.
 //!
-//! 시스템 제약 (스펙 v1.0 §4.3 — Stateless Embedder):
-//! `Embedder`는 요청 간 상태를 갖지 않는다. 부하 증가 시 코어 엔진과 분리된
-//! 스레드 풀에서 인스턴스를 횡적으로 확장할 수 있어야 한다.
+//! System Constraint (Spec v1.0 §4.3 — Stateless Embedder):
+//! The `Embedder` must remain stateless across requests to allow horizontal scaling on separate thread pools.
 
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
@@ -19,18 +18,18 @@ use ort::session::Session;
 use ort::value::Tensor;
 use tokenizers::Tokenizer;
 
-/// Drain 파싱을 거친 구조화 로그.
+/// Structured log after Drain parsing.
 pub struct ParsedLog {
     pub template_id: u64,
-    /// 동적 변수가 `<*>`로 치환된 정적 템플릿 문자열 (임베딩 입력).
+    /// Static template string where dynamic variables are replaced by `<*>` (used as embedding input).
     pub template: String,
-    /// 인입 시각 (Unix epoch 초).
+    /// Ingestion timestamp (Unix epoch in seconds).
     pub timestamp: i64,
     pub metadata: HashMap<String, String>,
     pub raw_message: String,
 }
 
-/// FNV-1a 64-bit — 프로세스 재시작·Rust 버전과 무관하게 결정적인 template_id 해시.
+/// FNV-1a 64-bit — Deterministic hash for template_id, independent of process restarts or Rust versions.
 fn fnv1a64(s: &str) -> u64 {
     let mut h: u64 = 0xcbf29ce484222325;
     for b in s.as_bytes() {
@@ -40,7 +39,7 @@ fn fnv1a64(s: &str) -> u64 {
     h
 }
 
-/// Drain 알고리즘 래퍼 — 로그의 동적 변수를 지우고 정적 템플릿 ID를 추출한다.
+/// Wrapper for the Drain parsing tree — strips dynamic variables to extract static template IDs.
 pub struct TemplateParser {
     tree: DrainTree,
 }
@@ -78,8 +77,8 @@ impl TemplateParser {
     }
 }
 
-/// CPU(ONNX) 기반 문장 임베딩 — all-MiniLM-L6-v2 (384차원).
-/// mean pooling + L2 정규화 수행.
+/// CPU (ONNX) based sentence embedding — all-MiniLM-L6-v2 (384-dimensional).
+/// Performs mean pooling and L2 normalization.
 pub struct Embedder {
     session: Session,
     tokenizer: Tokenizer,
@@ -89,9 +88,9 @@ impl Embedder {
     pub fn new(model_path: impl AsRef<Path>, tokenizer_path: impl AsRef<Path>) -> Result<Self> {
         let session = Session::builder()?
             .commit_from_file(model_path.as_ref())
-            .context("ONNX 모델 로드 실패")?;
+            .context("Failed to load ONNX model")?;
         let tokenizer = Tokenizer::from_file(tokenizer_path.as_ref())
-            .map_err(|e| anyhow!("토크나이저 로드 실패: {e}"))?;
+            .map_err(|e| anyhow!("Failed to load tokenizer: {e}"))?;
         Ok(Self { session, tokenizer })
     }
 
@@ -99,7 +98,7 @@ impl Embedder {
         let encoding = self
             .tokenizer
             .encode(text, true)
-            .map_err(|e| anyhow!("토크나이즈 실패: {e}"))?;
+            .map_err(|e| anyhow!("Failed to tokenize text: {e}"))?;
         let ids: Vec<i64> = encoding.get_ids().iter().map(|&x| i64::from(x)).collect();
         let mask: Vec<i64> = encoding
             .get_attention_mask()
@@ -121,7 +120,7 @@ impl Embedder {
         let (shape, data) = outputs["last_hidden_state"].try_extract_tensor::<f32>()?;
         let hidden = shape[2] as usize;
 
-        // attention mask 기반 mean pooling
+        // Mean pooling based on attention mask
         let mut vector = vec![0f32; hidden];
         let mut count = 0f32;
         for (token, &m) in mask.iter().enumerate() {
@@ -137,7 +136,7 @@ impl Embedder {
             *v /= count.max(1.0);
         }
 
-        // L2 정규화
+        // L2 normalization
         let norm = vector.iter().map(|v| v * v).sum::<f32>().sqrt();
         if norm > 0.0 {
             for v in vector.iter_mut() {
@@ -148,7 +147,7 @@ impl Embedder {
     }
 }
 
-/// 템플릿 ID → 벡터 LRU 캐시. O(1) 룩업으로 임베딩 비용을 회피하거나 ONNX 추론을 실행한다.
+/// Template ID to vector LRU cache. Avoids embedding overhead via O(1) lookups, falling back to ONNX inference on cache misses.
 pub struct VectorCache {
     parser: TemplateParser,
     cache: LruCache<u64, Arc<[f32]>>,
@@ -158,7 +157,7 @@ pub struct VectorCache {
 }
 
 impl VectorCache {
-    /// 스펙 최소치 — 메모리 가용량에 따라 `with_capacity`로 상향.
+    /// Minimum specification threshold — scales with `with_capacity` based on memory availability.
     pub const DEFAULT_CAPACITY: usize = 10_000;
 
     pub fn new(embedder: Embedder) -> Self {
@@ -187,7 +186,7 @@ impl VectorCache {
         Ok((parsed, vector))
     }
 
-    /// 검색 쿼리용 임베딩 — 쿼리는 템플릿이 아니므로 캐시를 거치지 않는다.
+    /// Embeds a search query — queries bypass the LRU cache since they are not templates.
     pub fn embed_uncached(&mut self, text: &str) -> Result<Vec<f32>> {
         self.embedder.embed(text)
     }
@@ -227,7 +226,7 @@ mod tests {
         let b = parser.parse("Node 4 is online");
         assert_eq!(
             a.template_id, b.template_id,
-            "변수만 다른 로그는 같은 템플릿"
+            "logs differing only in variables should share the same template"
         );
         assert_eq!(a.raw_message, "Node 2 is online");
     }

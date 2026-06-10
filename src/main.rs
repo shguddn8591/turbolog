@@ -1,6 +1,8 @@
-//! TurboLog 서버 데몬.
+//! TurboLog server daemon.
 //!
-//! 환경 변수: TURBOLOG_PORT(8087), TURBOLOG_DATA_DIR(./data), TURBOLOG_MODEL_DIR(./models)
+//! TurboLog Server Daemon.
+//!
+//! Environment Variables: TURBOLOG_PORT (default: 8087), TURBOLOG_DATA_DIR (default: ./data), TURBOLOG_MODEL_DIR (default: ./models)
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -28,7 +30,7 @@ fn main() -> anyhow::Result<()> {
     )?;
     let engine = Arc::new(TurboLogEngine::open(cfg, embedder)?);
 
-    // 스왑 데몬: 10초 주기 봉인 + 1시간마다 보존 만료 청크 unlink
+    // Swap Daemon: Seals window every 10s + unlinks expired retention chunks every hour
     {
         let engine = Arc::clone(&engine);
         std::thread::spawn(move || {
@@ -37,7 +39,7 @@ fn main() -> anyhow::Result<()> {
             loop {
                 std::thread::sleep(interval);
                 if let Err(e) = engine.swap_tick() {
-                    eprintln!("swap_tick 실패: {e:#}");
+                    eprintln!("swap_tick failed: {e:#}");
                 }
                 let hour = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -47,8 +49,8 @@ fn main() -> anyhow::Result<()> {
                     last_sweep_hour = hour;
                     match engine.sweep_chunks() {
                         Ok(0) => {}
-                        Ok(n) => println!("보존 만료 청크 {n}개 삭제"),
-                        Err(e) => eprintln!("sweep 실패: {e:#}"),
+                        Ok(n) => println!("Deleted {n} expired retention chunks"),
+                        Err(e) => eprintln!("sweep failed: {e:#}"),
                     }
                 }
             }

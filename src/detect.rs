@@ -1,31 +1,31 @@
-//! Anomaly Detection Layer — K-Centroid 기반 2-tier 고속 스크리닝 필터.
+//! Anomaly Detection Layer — K-Centroid based 2-tier fast screening filter.
 //!
-//! - **Tier 1**: 고정 centroid들과의 유클리드 거리 — O(k·dim), 전수 조사 회피.
-//!   정상 범주면 즉시 통과.
-//! - **Tier 2**: 임계치 초과 벡터만 turbovec `IdMapIndex` 심층 검색으로 넘겨,
-//!   유사 사건 ID(allowlist로 동일 서버 등 부분집합 제한 가능)를 확보한다.
+//! - **Tier 1**: Euclidean distance to frozen centroids — O(k·dim), bypassing exhaustive searches.
+//!   Normal patterns return immediately.
+//! - **Tier 2**: Vectors exceeding the anomaly threshold are forwarded to the turbovec `IdMapIndex` deep search
+//!   to retrieve similar incident IDs (allowing subset limiting via an allowlist, e.g., restrict to the same server).
 //!
-//! 시스템 제약 (스펙 v1.0 §4.1 — No Dynamic Re-training):
-//! centroid는 시동 시 1회 캘리브레이션(`fit`) 후 전체 수명 주기 동안 고정된다.
-//! 들어오는 데이터에 맞춰 실시간으로 재학습하는 로직은 절대 구현하지 않는다.
+//! System Constraint (Spec v1.0 §4.1 — No Dynamic Re-training):
+//! Centroids are calibrated once at startup (`fit`) and frozen for the engine's lifetime.
+//! Real-time incremental re-training based on incoming streams is strictly prohibited.
 
 use turbovec::IdMapIndex;
 
-/// Tier 2 심층 검색에서 확보할 유사 사건 수.
+/// Number of similar incident context IDs to retrieve in Tier 2 deep searches.
 pub const TIER2_K: usize = 5;
 
 pub enum DetectionResult {
     Normal,
     Anomaly {
-        /// 가장 가까운 정상 centroid까지의 유클리드 거리.
+        /// Euclidean distance to the nearest normal centroid.
         score: f32,
-        /// 최근 윈도우에서 검색된 유사 사건의 외부 ID들.
+        /// External IDs of similar incidents retrieved from recent windows.
         nearest_incidents: Vec<u64>,
     },
 }
 
 pub struct AnomalyDetector {
-    /// 오염을 막기 위해 런타임에 변경되지 않는 고정 중심점들.
+    /// Frozen centroids representing normal log distribution, protecting against drift.
     frozen_centroids: Vec<Vec<f32>>,
     anomaly_threshold: f32,
 }
@@ -40,23 +40,23 @@ fn euclidean(a: &[f32], b: &[f32]) -> f32 {
 
 impl AnomalyDetector {
     pub fn new(frozen_centroids: Vec<Vec<f32>>, anomaly_threshold: f32) -> Self {
-        assert!(!frozen_centroids.is_empty(), "centroid는 최소 1개 필요");
+        assert!(!frozen_centroids.is_empty(), "At least one centroid is required");
         Self {
             frozen_centroids,
             anomaly_threshold,
         }
     }
 
-    /// 시동 시 1회 K-means(Lloyd, 16회 반복, 결정적 초기화) 캘리브레이션으로
-    /// 정상 군집 중심점을 학습한 뒤 동결한다. `normal_vectors`는 n×dim 평탄 배열.
+    /// Fits normal clustering centroids via K-means (Lloyd, 16 iterations, deterministic initialization) at startup and freezes them.
+    /// `normal_vectors` is a flat array of size n×dim.
     pub fn fit(normal_vectors: &[f32], dim: usize, k: usize, anomaly_threshold: f32) -> Self {
         assert!(dim > 0 && !normal_vectors.is_empty());
-        assert!(normal_vectors.len().is_multiple_of(dim), "n×dim 평탄 배열이어야 함");
+        assert!(normal_vectors.len() % dim == 0, "Input vectors must form a flat n×dim array");
         let n = normal_vectors.len() / dim;
         let k = k.clamp(1, n);
         let row = |i: usize| &normal_vectors[i * dim..(i + 1) * dim];
 
-        // 결정적 초기화: 균등 간격 샘플
+        // Deterministic initialization: uniform spacing samples
         let mut centroids: Vec<Vec<f32>> = (0..k).map(|c| row(c * n / k).to_vec()).collect();
         let mut assignment = vec![0usize; n];
         for _ in 0..16 {
@@ -85,14 +85,14 @@ impl AnomalyDetector {
                     }
                     centroids[c] = sums[c].clone();
                 }
-                // 빈 클러스터는 기존 centroid 유지
+                // Empty clusters retain their previous centroids.
             }
         }
         Self::new(centroids, anomaly_threshold)
     }
 
-    /// Tier 1 원시 연산: 가장 가까운 고정 centroid까지의 유클리드 거리. O(k·dim).
-    /// 임계치 캘리브레이션(예: 정상 샘플 거리의 p99)에도 사용한다.
+    /// Tier 1 operation: Euclidean distance to the nearest frozen centroid. O(k·dim).
+    /// Used both for filtering and threshold calibration (e.g. p99 of normal distance).
     pub fn min_distance(&self, vector: &[f32]) -> f32 {
         self.frozen_centroids
             .iter()
@@ -100,12 +100,12 @@ impl AnomalyDetector {
             .fold(f32::INFINITY, f32::min)
     }
 
-    /// O(k) 복잡도로 정상 판별 후, 임계치 초과 시 search_index를 뒤진다.
+    /// Classifies an incoming vector in O(k) complexity. Falls back to deep search in search_index on threshold breach.
     pub fn detect(&self, vector: &[f32], search_index: &IdMapIndex) -> DetectionResult {
         self.detect_filtered(vector, search_index, None)
     }
 
-    /// Tier 2 검색을 allowlist(외부 u64 ID 집합 — 예: 동일 서버의 로그)로 제한한다.
+    /// Constrains the Tier 2 deep search to a subset of external u64 IDs (e.g. logs from the same host).
     pub fn detect_filtered(
         &self,
         vector: &[f32],
@@ -123,14 +123,14 @@ impl AnomalyDetector {
     }
 }
 
-/// Tier 2: 최근 윈도우 인덱스에서 유사 사건 ID 확보.
+/// Tier 2: Retrieves similar incident context IDs from the recently sealed index window.
 fn tier2_context(vector: &[f32], index: &IdMapIndex, allowlist: Option<&[u64]>) -> Vec<u64> {
     if index.is_empty() || index.dim() != vector.len() {
         return Vec::new();
     }
     match allowlist {
         Some(ids) => {
-            // search_with_allowlist는 빈 목록·미존재 ID에 panic — 사전 필터링 필수
+            // search_with_allowlist panics on empty or non-existent IDs — pre-filtering is mandatory.
             let present: Vec<u64> = ids
                 .iter()
                 .copied()
@@ -153,7 +153,7 @@ mod tests {
 
     #[test]
     fn fit_two_clusters_and_min_distance() {
-        // e1 주변과 e2 주변 두 군집 (dim=4)
+        // Two clusters centered around unit vectors e1 and e2 (dim=4)
         let mut data = Vec::new();
         for j in 0..10 {
             let eps = j as f32 * 0.01;
@@ -163,11 +163,11 @@ mod tests {
         let det = AnomalyDetector::fit(&data, 4, 2, 0.5);
         assert!(
             det.min_distance(&[1.0, 0.0, 0.0, 0.0]) < 0.2,
-            "군집 내부는 가까움"
+            "Cluster centers should be close to their respective members"
         );
         assert!(
             det.min_distance(&[-1.0, 0.0, 0.0, 0.0]) > 1.0,
-            "반대 방향은 멀어짐"
+            "Opposite directions should yield large distances"
         );
     }
 }

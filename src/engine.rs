@@ -1,16 +1,16 @@
-//! TurboLog 엔진 — 전체 데이터 흐름의 조립.
+//! TurboLog Engine — Assembly of the entire data pipeline.
 //!
-//! Ingest → Parse(Drain) → Embed(캐시/ONNX) → WAL → Ping-Pong 인덱싱 → 탐지
-//! 10초 주기 `swap_tick`: 윈도우 봉인 → .tvim 세그먼트 백업 → 링 발행 → WAL 로테이트
+//! Ingest → Parse (Drain) → Embed (Cache/ONNX) → WAL → Ping-Pong Indexing → Anomaly Detection
+//! 10-second periodic `swap_tick`: Seal window → Backup `.tvim` segment → Publish to Ring → Rotate WAL
 //!
-//! ## 락 순서 불변식
-//! `wal` Mutex가 쓰기 경로(WAL append + indexer ingest / 스왑 + rotate)의 단일 직렬화
-//! 지점이다. 이를 어기면 "WAL에는 있는데 봉인 직후 rotate로 지워지는" 유실 레이스가 생긴다.
-//! 검색 경로는 어떤 쓰기 락도 건드리지 않는다 (ArcSwap 스냅샷 + ring Mutex 순간 점유).
+//! ## Lock Order Invariants
+//! The `wal` Mutex is the single serialization point for the write path (WAL append + indexer ingest / swap + rotate).
+//! Violating this introduces a race condition where data exists in the WAL but gets deleted by a rotation immediately after sealing.
+//! The search path never acquires any write locks (leverages ArcSwap snapshots + short-lived ring Mutex acquisitions).
 //!
-//! ## 캘리브레이션 (스펙 §4.1 — No Dynamic Re-training)
-//! 시동 후 처음 보는 템플릿 벡터를 모아 `calibration_templates`개가 차면 K-means를 1회
-//! 실행해 centroid를 동결한다. 이후 재학습은 없다.
+//! ## Calibration (Spec §4.1 — No Dynamic Re-training)
+//! Upon startup, novel template vectors are buffered. Once `calibration_templates` are collected,
+//! K-means is executed exactly once to freeze the centroids. No dynamic re-training is performed thereafter.
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -31,17 +31,17 @@ use crate::wal::Wal;
 pub struct EngineConfig {
     pub dim: usize,
     pub bit_width: usize,
-    /// WAL 파일과 청크 디렉터리가 놓이는 곳.
+    /// Directory where WAL files and chunk directories are stored.
     pub data_dir: PathBuf,
     pub swap_interval_secs: u64,
-    /// 시간 청크 보존 기한 (기본 7일).
+    /// Hour-based chunk retention limit (default: 7 days).
     pub retention_hours: u64,
-    /// 인메모리에 유지하는 최근 봉인 윈도우 수 (검색 깊이 = ring × swap_interval).
+    /// Number of recently sealed windows retained in-memory (Search Depth = ring_windows × swap_interval).
     pub ring_windows: usize,
-    /// K-Centroid 개수 (Tier 1).
+    /// Number of K-Centroids (Tier 1).
     pub centroids: usize,
     pub anomaly_threshold: f32,
-    /// 이만큼의 고유 템플릿이 모이면 centroid를 1회 학습 후 동결.
+    /// Number of unique templates required to fit and freeze centroids.
     pub calibration_templates: usize,
 }
 
@@ -72,7 +72,7 @@ pub struct LogReport {
     pub id: u64,
     pub template_id: u64,
     pub timestamp: i64,
-    /// None = 정상 또는 캘리브레이션 전.
+    /// None = normal or pre-calibration.
     pub anomaly: Option<AnomalyReport>,
 }
 
@@ -98,13 +98,13 @@ pub struct TurboLogEngine {
     cfg: EngineConfig,
     cache: Mutex<VectorCache>,
     indexer: PingPongIndexer,
-    /// 쓰기 경로 직렬화 지점 — 모듈 doc의 락 순서 불변식 참조.
+    /// Write path serialization point — see Lock Order Invariants in module docs.
     wal: Mutex<Wal>,
     chunks: ChunkStore,
-    /// 최근 봉인 윈도우들 (최신이 앞). 검색은 이 링을 병합한다.
+    /// Ring buffer of recently sealed windows (newest first). Search queries merge this ring.
     ring: Mutex<VecDeque<Arc<IdMapIndex>>>,
     detector: RwLock<Option<AnomalyDetector>>,
-    /// 캘리브레이션용 신규 템플릿 벡터 버퍼 (동결 후 비움).
+    /// Vector buffer of novel templates for calibration (cleared after freezing).
     calibration: Mutex<Vec<f32>>,
     next_id: AtomicU64,
     ingested_total: AtomicU64,
@@ -118,7 +118,7 @@ fn now_millis() -> i64 {
 }
 
 impl TurboLogEngine {
-    /// 엔진을 연다. WAL에 잔여 레코드가 있으면(크래시 복구) 쓰기 윈도우로 재생한다.
+    /// Opens the engine. Replays any existing records in the WAL (crash recovery) into the write window.
     pub fn open(cfg: EngineConfig, embedder: Embedder) -> Result<Self> {
         std::fs::create_dir_all(&cfg.data_dir)?;
         let wal_path = cfg.data_dir.join("wal.bin");
@@ -131,7 +131,7 @@ impl TurboLogEngine {
             max_replayed_id = max_replayed_id.max(*id);
         }
 
-        // 시간 기반 시작점 — 재시작 후에도 과거 세그먼트의 ID와 충돌하지 않게 단조 증가.
+        // Time-based starting ID — monotonically increases to prevent collisions with historical segment IDs upon restart.
         let next_id = ((now_millis() as u64) << 20).max(max_replayed_id + 1);
 
         Ok(Self {
@@ -152,7 +152,7 @@ impl TurboLogEngine {
         &self.cfg
     }
 
-    /// 로그 1건 인입: 파싱/임베딩 → WAL → 인덱싱 → 탐지.
+    /// Ingests a single log line: Parse/Embed → WAL → Index → Anomaly Detection.
     pub fn ingest_log(&self, line: &str) -> Result<LogReport> {
         let (parsed, vector, new_template) = {
             let mut cache = self.cache.lock().unwrap();
@@ -197,10 +197,10 @@ impl TurboLogEngine {
         })
     }
 
-    /// 텍스트 쿼리로 링(최근 봉인 윈도우들)을 병합 검색한다.
-    /// turbovec 점수는 내적 유사도(클수록 가까움) — 내림차순 병합.
+    /// Searches the ring buffer of recently sealed windows using a semantic text query.
+    /// The score in turbovec represents inner-product similarity (higher is closer) — merged in descending order.
     pub fn search_text(&self, query: &str, k: usize) -> Result<Vec<SearchHit>> {
-        ensure!(k > 0, "k는 1 이상");
+        ensure!(k > 0, "k must be 1 or greater");
         let vector = self.cache.lock().unwrap().embed_uncached(query)?;
         let windows: Vec<Arc<IdMapIndex>> = self.ring.lock().unwrap().iter().cloned().collect();
 
@@ -222,8 +222,8 @@ impl TurboLogEngine {
         Ok(hits)
     }
 
-    /// 스왑 주기마다 호출: 윈도우 봉인 → .tvim 세그먼트 백업 → 링 발행 → WAL 로테이트.
-    /// 빈 윈도우면 아무것도 하지 않는다 (유휴 시 세그먼트 파일 스팸 방지).
+    /// Invoked periodically by the swap daemon: Seals the active write index → flushes the `.tvim` segment → publishes the new search snapshot → rotates the WAL.
+    /// If the active index is empty, it returns early to prevent creating empty segment files during idle periods.
     pub fn swap_tick(&self) -> Result<bool> {
         let mut wal = self.wal.lock().unwrap();
         if self.indexer.pending_len() == 0 {
@@ -241,7 +241,7 @@ impl TurboLogEngine {
         Ok(true)
     }
 
-    /// 보존 기한이 지난 시간 청크 디렉터리를 OS 레벨에서 삭제한다.
+    /// Deletes hourly chunk directories that exceed the retention window at the OS level.
     pub fn sweep_chunks(&self) -> Result<usize> {
         self.chunks.sweep(self.cfg.retention_hours, now_millis())
     }
@@ -264,7 +264,7 @@ impl TurboLogEngine {
         }
     }
 
-    /// 신규 템플릿 벡터를 모아 목표치에 도달하면 centroid를 1회 학습 후 동결한다.
+    /// Buffers novel template vectors and triggers calibration (K-means fitting) once the target limit is reached.
     fn maybe_calibrate(&self, vector: &[f32]) {
         if self.detector.read().unwrap().is_some() {
             return;

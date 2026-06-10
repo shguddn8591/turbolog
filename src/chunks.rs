@@ -1,10 +1,10 @@
-//! 시간 청크 저장소 — 10초 스왑마다 봉인되는 세그먼트(.tvim)를 1시간 디렉터리로 묶는다.
+//! Historical Chunk Store — Groups sealed `.tvim` segments (produced every 10s swap) into 1-hour directories.
 //!
-//! 시스템 제약 (스펙 v1.0 §4.2 — Hard Physical Deletion):
-//! 보존 기한 만료 시 `remove()` 반복 호출로 파편화를 유발하지 않고,
-//! 시간 디렉터리 자체를 OS 레벨에서 삭제(unlink)한다.
+//! System Constraint (Spec v1.0 §4.2 — Hard Physical Deletion):
+//! To avoid filesystem fragmentation, expired directories are unlinked completely at the OS level
+//! rather than performing individual per-vector deletions.
 //!
-//! 레이아웃: `<root>/hour-<unix_hour>/seg-<unix_millis>.tvim`
+//! Layout: `<root>/hour-<unix_hour>/seg-<unix_millis>.tvim`
 
 use std::path::{Path, PathBuf};
 
@@ -18,11 +18,11 @@ impl ChunkStore {
     pub fn new(root: impl AsRef<Path>) -> Result<Self> {
         let root = root.as_ref().to_path_buf();
         std::fs::create_dir_all(&root)
-            .with_context(|| format!("청크 루트 생성 실패: {}", root.display()))?;
+            .with_context(|| format!("Failed to create chunk root directory at {}", root.display()))?;
         Ok(Self { root })
     }
 
-    /// 주어진 시각의 세그먼트 경로를 만들고 시간 디렉터리를 보장한다.
+    /// Generates the segment path for a given timestamp and ensures the parent hour directory exists.
     pub fn segment_path(&self, unix_millis: i64) -> Result<PathBuf> {
         let hour = unix_millis / 3_600_000;
         let dir = self.root.join(format!("hour-{hour}"));
@@ -30,7 +30,7 @@ impl ChunkStore {
         Ok(dir.join(format!("seg-{unix_millis}.tvim")))
     }
 
-    /// 보존 기한이 지난 시간 디렉터리를 통째로 삭제한다. 삭제한 디렉터리 수 반환.
+    /// Deletes entire hour directories that exceed the retention duration. Returns the count of deleted directories.
     pub fn sweep(&self, retention_hours: u64, now_millis: i64) -> Result<usize> {
         let current_hour = now_millis / 3_600_000;
         let cutoff = current_hour - retention_hours as i64;
@@ -43,11 +43,11 @@ impl ChunkStore {
                 .and_then(|n| n.strip_prefix("hour-"))
                 .and_then(|h| h.parse::<i64>().ok())
             else {
-                continue; // 형식이 다른 항목은 건드리지 않음
+                continue; // Do not touch entries with unmatched format layouts
             };
             if hour < cutoff {
                 std::fs::remove_dir_all(entry.path())
-                    .with_context(|| format!("청크 삭제 실패: {}", entry.path().display()))?;
+                    .with_context(|| format!("Failed to delete chunk directory at {}", entry.path().display()))?;
                 removed += 1;
             }
         }
@@ -65,15 +65,15 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
         let store = ChunkStore::new(&root).unwrap();
 
-        let now: i64 = 1_770_000_000_000; // 임의 기준 시각 (ms)
-        let old = now - 10 * 3_600_000; // 10시간 전
+        let now: i64 = 1_770_000_000_000; // arbitrary reference time (ms)
+        let old = now - 10 * 3_600_000; // 10 hours ago
         let p_now = store.segment_path(now).unwrap();
         let p_old = store.segment_path(old).unwrap();
         std::fs::write(&p_now, b"x").unwrap();
         std::fs::write(&p_old, b"x").unwrap();
-        assert_ne!(p_now.parent(), p_old.parent(), "다른 시간 디렉터리");
+        assert_ne!(p_now.parent(), p_old.parent(), "Segments must reside in different hourly directories");
 
-        // 보존 7시간 → 10시간 전 디렉터리만 unlink
+        // Retention set to 7 hours -> only the segment from 10 hours ago is deleted.
         let removed = store.sweep(7, now).unwrap();
         assert_eq!(removed, 1);
         assert!(p_now.exists());

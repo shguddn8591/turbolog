@@ -1,7 +1,7 @@
-//! HTTP 인터페이스 — 삽입(/logs)·검색(/search)·상태(/stats).
+//! HTTP Interface — Ingestion (/logs), search (/search), and stats (/stats).
 //!
-//! 동기식 엔진에 맞춰 `tiny_http` + 워커 스레드 풀로 구현 (async 런타임 불필요).
-//! gRPC는 필요해질 때 같은 엔진 위에 추가한다.
+//! Implemented using `tiny_http` + a worker thread pool tailored for synchronous execution (no async runtime overhead).
+//! gRPC support can be built on top of the same engine when required.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -30,18 +30,18 @@ fn default_k() -> usize {
     5
 }
 
-/// 서버를 띄우고 (바인딩된 주소, 워커 핸들들)을 반환한다. `addr`에 포트 0을 주면
-/// 임시 포트가 배정된다 (테스트용).
+/// Spawns the server and returns the bound socket address and worker join handles.
+/// Providing port `0` in `addr` lets the OS allocate an ephemeral port (ideal for testing).
 pub fn run_server(
     engine: Arc<TurboLogEngine>,
     addr: &str,
     workers: usize,
 ) -> Result<(SocketAddr, Vec<JoinHandle<()>>)> {
-    let server = Arc::new(Server::http(addr).map_err(|e| anyhow!("HTTP 바인딩 실패: {e}"))?);
+    let server = Arc::new(Server::http(addr).map_err(|e| anyhow!("Failed to bind HTTP server: {e}"))?);
     let local = server
         .server_addr()
         .to_ip()
-        .ok_or_else(|| anyhow!("IP 주소 아님"))?;
+        .ok_or_else(|| anyhow!("Not a valid IP address"))?;
     let handles = (0..workers.max(1))
         .map(|_| {
             let server = Arc::clone(&server);
@@ -59,7 +59,7 @@ pub fn run_server(
 fn handle(engine: &TurboLogEngine, mut request: Request) {
     let mut body = String::new();
     if request.as_reader().read_to_string(&mut body).is_err() {
-        respond(request, 400, json!({"error": "본문 읽기 실패"}));
+        respond(request, 400, json!({"error": "Failed to read request body"}));
         return;
     }
 
@@ -78,7 +78,7 @@ fn handle(engine: &TurboLogEngine, mut request: Request) {
 fn post_logs(engine: &TurboLogEngine, body: &str) -> (u32, serde_json::Value) {
     let parsed: LogsBody = match serde_json::from_str(body) {
         Ok(p) => p,
-        Err(e) => return (400, json!({"error": format!("잘못된 요청: {e}")})),
+        Err(e) => return (400, json!({"error": format!("Invalid request: {e}")})),
     };
     let mut results = Vec::with_capacity(parsed.logs.len());
     for line in &parsed.logs {
@@ -93,7 +93,7 @@ fn post_logs(engine: &TurboLogEngine, body: &str) -> (u32, serde_json::Value) {
 fn post_search(engine: &TurboLogEngine, body: &str) -> (u32, serde_json::Value) {
     let parsed: SearchBody = match serde_json::from_str(body) {
         Ok(p) => p,
-        Err(e) => return (400, json!({"error": format!("잘못된 요청: {e}")})),
+        Err(e) => return (400, json!({"error": format!("Invalid request: {e}")})),
     };
     match engine.search_text(&parsed.query, parsed.k) {
         Ok(hits) => (

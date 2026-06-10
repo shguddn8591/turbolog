@@ -1,8 +1,8 @@
-//! TurboLog — 초경량 시계열 로그 벡터 엔진.
+//! TurboLog — Ultralight time-series log vector engine.
 //!
-//! GPU·무거운 벡터 DB 없이 초당 수천 건의 로그 스트림을 실시간 인덱싱하고
-//! 이상 징후를 탐지한다. 데이터 흐름:
-//! Ingest → Parse(Drain) → Embed(캐시/ONNX) → Tier 1/2 탐지 → Ping-Pong 인덱싱 → Flush
+//! Index thousands of log streams per second in real-time and detect anomalies
+//! without high-cost GPUs or heavy vector databases. Data flow:
+//! Ingest → Parse(Drain) → Embed(Cache/ONNX) → Tier 1/2 Detection → Ping-Pong Indexing → Flush
 
 pub mod chunks;
 pub mod detect;

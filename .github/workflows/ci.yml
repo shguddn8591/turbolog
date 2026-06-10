@@ -6,17 +6,17 @@ on:
   pull_request:
     branches: [ "main" ]
   schedule:
-    # 매주 일요일 00:00 UTC — 의존성 깨짐 조기 감지
+    # Every Sunday 00:00 UTC — early detection of dependency breakage
     - cron: '0 0 * * 0'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true # 같은 브랜치의 이전 실행은 취소하여 자원 절약
+  cancel-in-progress: true # Cancel previous runs on the same branch to save resources
 
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  # ONNX 모델 캐시 키 (모델 URL이 바뀌면 같이 갱신)
+  # ONNX model cache key (update when the model URL changes)
   MODEL_CACHE_KEY: onnx-minilm-v2-rev1
 
 # ─────────────────────────── Jobs ───────────────────────────
@@ -59,7 +59,7 @@ jobs:
           grep -rn 'TODO\|FIXME\|HACK\|XXX' src/ || echo "✅ Clean — no TODO markers found"
           echo "::endgroup::"
 
-  # ② Unit Tests (크로스 플랫폼) ─────────────────────────────
+  # ② Unit Tests (cross-platform) ─────────────────────────────
   test:
     name: Test (${{ matrix.os }}, rust-${{ matrix.rust }})
     needs: lint
@@ -70,7 +70,7 @@ jobs:
         os: [ ubuntu-latest, macos-latest ]
         rust: [ stable, beta ]
         exclude:
-          # beta는 ubuntu에서만 검증 — macOS beta는 비용 대비 가치 낮음
+          # Validate beta only on Ubuntu — macOS beta runs are not cost-effective
           - os: macos-latest
             rust: beta
     steps:
@@ -109,7 +109,7 @@ jobs:
       - name: Run doc tests
         run: cargo test --doc
 
-  # ③ MSRV — 최소 지원 Rust 버전 검증 ───────────────────────
+  # ③ MSRV — minimum supported Rust version verification ───────────────────────
   msrv:
     name: MSRV (edition 2021)
     needs: lint
@@ -202,8 +202,8 @@ jobs:
         with:
           key: miri
 
-      # Miri는 FFI(ort, turbovec C 바인딩)를 실행할 수 없으므로
-      # 순수 Rust 유닛 테스트만 실행한다.
+      # Miri cannot run FFI (ort, turbovec C bindings),
+      # so we run only pure-Rust unit tests.
       - name: Run Miri on pure-Rust unit tests
         run: |
           cargo miri test --lib -- \
@@ -247,7 +247,7 @@ jobs:
 
       - name: Verify binary runs (--help or quick smoke)
         run: |
-          # 바이너리가 정상 링크되었는지 확인
+          # Verify the binary is compiled and linked properly
           file target/release/turbolog
           ls -lh target/release/turbolog
 

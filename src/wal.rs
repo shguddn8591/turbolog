@@ -1,13 +1,13 @@
-//! Write-Ahead Log — 스왑 사이 윈도우(기본 10초)의 장애 복구.
+//! Write-Ahead Log — Provides fault recovery for the active write window (default: 10s) between swaps.
 //!
-//! 레코드는 임베딩 완료된 (id, 벡터) 쌍이라 재기동 시 재임베딩 없이 복구된다.
-//! 스왑이 성공해 윈도우가 .tvim 청크로 봉인되면 `rotate`로 WAL을 비운다.
+//! Log records contain pre-embedded (id, vector) pairs, enabling instant replay upon recovery without re-triggering embedding.
+//! Once a window is sealed into a `.tvim` chunk, the WAL is truncated via `rotate`.
 //!
-//! 내구성 정책: append마다 write+flush(프로세스 크래시 안전). fsync는 레코드당
-//! 호출 시 처리량을 잡아먹으므로 하지 않는다 — OS 크래시 직전 수 초는 유실 허용.
+//! Durability Policy: Performs write+flush on every append (process crash-safe). To maintain high throughput,
+//! per-record fsync is omitted — a few seconds of data might be lost on full OS crashes.
 //!
-//! 포맷: 헤더 `"TLWAL1"` + dim(u32 LE), 레코드 = id(u64 LE) + dim×f32(LE).
-//! 꼬리의 불완전 레코드(크래시 잔여)는 replay 시 무시한다.
+//! Format: Header `"TLWAL1"` + dim (u32 LE), Record = id (u64 LE) + dim×f32 (LE).
+//! Truncated trailing records (from partial writes during a crash) are safely ignored on replay.
 
 use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
@@ -25,7 +25,7 @@ pub struct Wal {
 }
 
 impl Wal {
-    /// WAL 파일을 연다 (없으면 헤더와 함께 생성, 있으면 append 위치로 이동).
+    /// Opens the WAL file. Creates it with the header if absent, otherwise seeks to the end.
     pub fn open(path: impl AsRef<Path>, dim: usize) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
         let mut file = OpenOptions::new()
@@ -34,7 +34,7 @@ impl Wal {
             .create(true)
             .truncate(false)
             .open(&path)
-            .with_context(|| format!("WAL 열기 실패: {}", path.display()))?;
+            .with_context(|| format!("Failed to open WAL file at {}", path.display()))?;
 
         let len = file.metadata()?.len();
         if len == 0 {
@@ -45,7 +45,7 @@ impl Wal {
             let existing_dim = read_header(&mut file)?;
             ensure!(
                 existing_dim == dim,
-                "WAL dim 불일치: 파일 {existing_dim}, 요청 {dim}"
+                "WAL dimension mismatch: file has {existing_dim}, requested {dim}"
             );
             file.seek(SeekFrom::End(0))?;
         }
@@ -57,7 +57,7 @@ impl Wal {
     }
 
     pub fn append(&mut self, id: u64, vector: &[f32]) -> Result<()> {
-        ensure!(vector.len() == self.dim, "벡터 차원 불일치");
+        ensure!(vector.len() == self.dim, "Vector dimension mismatch");
         self.writer.write_all(&id.to_le_bytes())?;
         for v in vector {
             self.writer.write_all(&v.to_le_bytes())?;
@@ -66,7 +66,7 @@ impl Wal {
         Ok(())
     }
 
-    /// 윈도우 봉인 성공 후 호출 — WAL을 헤더만 남기고 비운다.
+    /// Invoked upon a successful window seal — truncates the WAL, leaving only the header.
     pub fn rotate(&mut self) -> Result<()> {
         self.writer.flush()?;
         let file = self.writer.get_mut();
@@ -75,8 +75,8 @@ impl Wal {
         Ok(())
     }
 
-    /// 재기동 복구: WAL의 전체 레코드를 읽는다. 파일이 없으면 빈 목록.
-    /// 꼬리의 불완전 레코드는 크래시 잔여물로 보고 무시한다.
+    /// Replay Recovery: Reads all complete records from the WAL file. Returns an empty list if the file is absent.
+    /// Trailing records that are partially written are ignored as crash residue.
     pub fn replay(path: impl AsRef<Path>, dim: usize) -> Result<Vec<(u64, Vec<f32>)>> {
         let path = path.as_ref();
         if !path.exists() {
@@ -86,7 +86,7 @@ impl Wal {
         let file_dim = read_header(&mut file)?;
         ensure!(
             file_dim == dim,
-            "WAL dim 불일치: 파일 {file_dim}, 요청 {dim}"
+            "WAL dimension mismatch: file has {file_dim}, requested {dim}"
         );
 
         let mut bytes = Vec::new();
@@ -114,7 +114,7 @@ fn read_header(file: &mut File) -> Result<usize> {
     let mut magic = [0u8; 6];
     file.read_exact(&mut magic)?;
     if &magic != MAGIC {
-        bail!("WAL magic 불일치 — 손상되었거나 다른 파일");
+        bail!("WAL magic mismatch — file is corrupted or of incorrect type");
     }
     let mut dim_bytes = [0u8; 4];
     file.read_exact(&mut dim_bytes)?;
@@ -143,14 +143,14 @@ mod tests {
         assert_eq!(entries[0].0, 1);
         assert_eq!(entries[1].1, vec![1.0, 0.0, 0.0, 0.0]);
 
-        // 재오픈 후 추가 append → 기존 레코드 보존
+        // Reopen and append further -> original records should be preserved
         {
             let mut wal = Wal::open(&path, 4).unwrap();
             wal.append(3, &[0.0; 4]).unwrap();
         }
         assert_eq!(Wal::replay(&path, 4).unwrap().len(), 3);
 
-        // rotate → 비워짐
+        // rotate -> cleared
         {
             let mut wal = Wal::open(&path, 4).unwrap();
             wal.rotate().unwrap();
@@ -170,7 +170,7 @@ mod tests {
             let mut wal = Wal::open(&path, 4).unwrap();
             wal.append(1, &[0.1; 4]).unwrap();
         }
-        // 불완전 레코드 흉내: 절반만 기록된 꼬리
+        // Simulate a partial record: tail is only partially written
         {
             use std::io::Write;
             let mut f = OpenOptions::new().append(true).open(&path).unwrap();
@@ -178,7 +178,7 @@ mod tests {
             f.write_all(&[0u8; 5]).unwrap();
         }
         let entries = Wal::replay(&path, 4).unwrap();
-        assert_eq!(entries.len(), 1, "불완전 꼬리는 무시");
+        assert_eq!(entries.len(), 1, "incomplete trailing records should be ignored");
         std::fs::remove_file(&path).ok();
     }
 }

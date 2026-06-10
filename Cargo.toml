@@ -2,7 +2,7 @@
 name = "turbolog"
 version = "0.1.0"
 edition = "2021"
-description = "초경량 시계열 로그 벡터 엔진 — 실시간 인덱싱 + 이상 탐지"
+description = "Ultralight time-series log vector engine — real-time indexing & anomaly detection"
 license = "MIT"
 
 [dependencies]

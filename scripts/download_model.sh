@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# all-MiniLM-L6-v2 ONNX 모델 + 토크나이저 다운로드 → models/
+# Downloads all-MiniLM-L6-v2 ONNX model + tokenizer → models/
 set -euo pipefail
 
 DIR="$(cd "$(dirname "$0")/.." && pwd)/models"
