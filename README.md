@@ -115,6 +115,8 @@ cargo build --release
 | `TURBOLOG_PORT` | `8087` | HTTP server port |
 | `TURBOLOG_DATA_DIR` | `./data` | Directory for WAL and chunk segments |
 | `TURBOLOG_MODEL_DIR` | `./models` | Directory containing ONNX model and tokenizer |
+| `TURBOLOG_EMBEDDERS` | `2` | Embedder pool size (parallel cache-miss inference; ~90 MB each) |
+| `TURBOLOG_AUTH_TOKEN` | _(unset)_ | When set, all endpoints require `Authorization: Bearer <token>` (401 otherwise). Request bodies are capped at 1 MiB (413 beyond) |
 
 ## 📡 API Reference
 

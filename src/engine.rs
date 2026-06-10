@@ -51,6 +51,9 @@ pub struct EngineConfig {
     pub ring_windows: usize,
     /// Number of K-Centroids (Tier 1).
     pub centroids: usize,
+    /// FLOOR (minimum) anomaly threshold. The effective threshold is derived at
+    /// calibration time as max(floor, p99 of calibration distances × 1.25) — see
+    /// `AnomalyDetector::fit_auto`. The floor dominates for tightly clustered templates.
     pub anomaly_threshold: f32,
     /// Number of unique templates required to fit and freeze centroids.
     pub calibration_templates: usize,
@@ -102,6 +105,8 @@ pub struct Stats {
     pub ring_windows: usize,
     pub ring_vectors: usize,
     pub detector_calibrated: bool,
+    /// Effective anomaly threshold once calibrated (max(floor, p99 × 1.25)).
+    pub detector_threshold: Option<f32>,
     pub ingested_total: u64,
 }
 
@@ -336,6 +341,12 @@ impl TurboLogEngine {
             (templates.hits(), templates.misses(), templates.hit_rate())
         };
         let ring = self.ring.lock().unwrap();
+        let detector_threshold = self
+            .detector
+            .read()
+            .unwrap()
+            .as_ref()
+            .map(|d| d.threshold());
         Stats {
             cache_hits,
             cache_misses,
@@ -343,7 +354,8 @@ impl TurboLogEngine {
             pending_window_len: self.indexer.pending_len(),
             ring_windows: ring.len(),
             ring_vectors: ring.iter().map(|w| w.len()).sum(),
-            detector_calibrated: self.detector.read().unwrap().is_some(),
+            detector_calibrated: detector_threshold.is_some(),
+            detector_threshold,
             ingested_total: self.ingested_total.load(Ordering::Relaxed),
         }
     }
@@ -359,7 +371,7 @@ impl TurboLogEngine {
         if templates < self.cfg.calibration_templates {
             return;
         }
-        let detector = AnomalyDetector::fit(
+        let detector = AnomalyDetector::fit_auto(
             &calibration,
             self.cfg.dim,
             self.cfg.centroids,

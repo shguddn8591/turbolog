@@ -91,6 +91,28 @@ impl AnomalyDetector {
         Self::new(centroids, anomaly_threshold)
     }
 
+    /// Like [`Self::fit`], but derives the anomaly threshold from the calibration data
+    /// itself: p99 of each sample's distance to its nearest centroid, with a 25% margin.
+    /// `floor` is the minimum threshold — it dominates when the calibration samples are
+    /// tightly clustered (p99 ≈ 0), preventing a degenerate zero threshold.
+    pub fn fit_auto(normal_vectors: &[f32], dim: usize, k: usize, floor: f32) -> Self {
+        const AUTO_THRESHOLD_MARGIN: f32 = 1.25;
+        let mut detector = Self::fit(normal_vectors, dim, k, floor);
+        let n = normal_vectors.len() / dim;
+        let mut distances: Vec<f32> = (0..n)
+            .map(|i| detector.min_distance(&normal_vectors[i * dim..(i + 1) * dim]))
+            .collect();
+        distances.sort_by(f32::total_cmp);
+        let p99 = distances[((distances.len() - 1) as f32 * 0.99) as usize];
+        detector.anomaly_threshold = (p99 * AUTO_THRESHOLD_MARGIN).max(floor);
+        detector
+    }
+
+    /// The effective anomaly threshold (Euclidean distance on the unit sphere).
+    pub fn threshold(&self) -> f32 {
+        self.anomaly_threshold
+    }
+
     /// Tier 1 operation: Euclidean distance to the nearest frozen centroid. O(k·dim).
     /// Used both for filtering and threshold calibration (e.g. p99 of normal distance).
     pub fn min_distance(&self, vector: &[f32]) -> f32 {
@@ -169,5 +191,28 @@ mod tests {
             det.min_distance(&[-1.0, 0.0, 0.0, 0.0]) > 1.0,
             "Opposite directions should yield large distances"
         );
+    }
+
+    #[test]
+    fn fit_auto_derives_threshold_from_spread() {
+        // Cluster with intra-cluster spread: p99 distance × 1.25 should exceed the floor.
+        let mut data = Vec::new();
+        for j in 0..50 {
+            let eps = j as f32 * 0.01; // up to 0.49 away from e1 in one coordinate
+            data.extend_from_slice(&[1.0, eps, 0.0, 0.0]);
+        }
+        let det = AnomalyDetector::fit_auto(&data, 4, 1, 0.05);
+        assert!(
+            det.threshold() > 0.05,
+            "p99-derived threshold should exceed the floor: {}",
+            det.threshold()
+        );
+        // A new sample within the observed spread stays normal under min_distance.
+        assert!(det.min_distance(&[1.0, 0.2, 0.0, 0.0]) <= det.threshold());
+
+        // Degenerate case: identical samples → p99 = 0 → floor dominates.
+        let tight: Vec<f32> = [1.0f32, 0.0, 0.0, 0.0].repeat(20);
+        let det = AnomalyDetector::fit_auto(&tight, 4, 1, 0.5);
+        assert_eq!(det.threshold(), 0.5, "floor must dominate when p99 ≈ 0");
     }
 }

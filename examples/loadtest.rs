@@ -170,7 +170,7 @@ fn main() -> anyhow::Result<()> {
 
     // ── 5) HTTP 경로 (배치 10건 × 4 클라이언트 스레드) ──
     {
-        let (addr, _h) = run_server(Arc::clone(&engine), "127.0.0.1:0", 4)?;
+        let (addr, _h) = run_server(Arc::clone(&engine), "127.0.0.1:0", 4, None)?;
         let url = format!("http://{addr}/logs");
         let reqs_per_thread = 250usize;
         let batch = 10usize;

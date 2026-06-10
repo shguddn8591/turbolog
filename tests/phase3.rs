@@ -174,7 +174,7 @@ fn http_api_end_to_end() {
     let engine = Arc::new(
         TurboLogEngine::open(test_config(data_dir.clone()), vec![make_embedder(&models)]).unwrap(),
     );
-    let (addr, _handles) = run_server(Arc::clone(&engine), "127.0.0.1:0", 2).unwrap();
+    let (addr, _handles) = run_server(Arc::clone(&engine), "127.0.0.1:0", 2, None).unwrap();
     let base = format!("http://{addr}");
 
     // POST /logs
@@ -259,5 +259,59 @@ fn sealed_wal_leftover_recovery() {
             .len(),
         4
     );
+    std::fs::remove_dir_all(&data_dir).ok();
+}
+
+#[test]
+fn http_auth_and_body_limit() {
+    let Some(models) = models_dir() else {
+        eprintln!("skip: models/ 없음");
+        return;
+    };
+    let data_dir = temp_data_dir("http_auth");
+    let engine = Arc::new(
+        TurboLogEngine::open(test_config(data_dir.clone()), vec![make_embedder(&models)]).unwrap(),
+    );
+    let (addr, _h) = run_server(
+        Arc::clone(&engine),
+        "127.0.0.1:0",
+        2,
+        Some("secret-token".into()),
+    )
+    .unwrap();
+    let base = format!("http://{addr}");
+
+    // 토큰 없음 → 401
+    let err = ureq::get(&format!("{base}/stats")).call().unwrap_err();
+    match err {
+        ureq::Error::Status(code, _) => assert_eq!(code, 401),
+        other => panic!("401이어야 함: {other}"),
+    }
+    // 잘못된 토큰 → 401
+    let err = ureq::get(&format!("{base}/stats"))
+        .set("Authorization", "Bearer wrong")
+        .call()
+        .unwrap_err();
+    match err {
+        ureq::Error::Status(code, _) => assert_eq!(code, 401),
+        other => panic!("401이어야 함: {other}"),
+    }
+    // 올바른 토큰 → 200
+    let resp = ureq::get(&format!("{base}/stats"))
+        .set("Authorization", "Bearer secret-token")
+        .call()
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    // 본문 한도 초과(1MiB+) → 413
+    let huge = "x".repeat(1024 * 1024 + 100);
+    let err = ureq::post(&format!("{base}/logs"))
+        .set("Authorization", "Bearer secret-token")
+        .send_json(serde_json::json!({ "logs": [huge] }))
+        .unwrap_err();
+    match err {
+        ureq::Error::Status(code, _) => assert_eq!(code, 413),
+        other => panic!("413이어야 함: {other}"),
+    }
     std::fs::remove_dir_all(&data_dir).ok();
 }

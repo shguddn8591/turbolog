@@ -64,7 +64,9 @@ fn main() -> anyhow::Result<()> {
         });
     }
 
-    let (addr, handles) = run_server(engine, &format!("0.0.0.0:{port}"), 4)?;
+    // Optional bearer-token auth — leave unset only on trusted networks.
+    let auth_token = std::env::var("TURBOLOG_AUTH_TOKEN").ok().filter(|t| !t.is_empty());
+    let (addr, handles) = run_server(engine, &format!("0.0.0.0:{port}"), 4, auth_token)?;
     println!("TurboLog listening on http://{addr}");
     for handle in handles {
         let _ = handle.join();
