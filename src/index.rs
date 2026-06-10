@@ -65,6 +65,11 @@ impl PingPongIndexer {
         self.search.load_full()
     }
 
+    /// 현재 쓰기 윈도우에 쌓인 벡터 수 (스왑 스킵 판단용).
+    pub fn pending_len(&self) -> usize {
+        self.write.lock().unwrap().len()
+    }
+
     /// 10초 주기로 백그라운드 스레드에서 호출.
     /// 쓰기 인덱스를 봉인해 검색 스냅샷으로 원자적 발행하고, `flush_path`가 주어지면
     /// 봉인된 윈도우를 .tvim 청크로 디스크에 백업한다. (WAL 복구 로직은 Phase 3)

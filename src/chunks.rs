@@ -1,0 +1,83 @@
+//! 시간 청크 저장소 — 10초 스왑마다 봉인되는 세그먼트(.tvim)를 1시간 디렉터리로 묶는다.
+//!
+//! 시스템 제약 (스펙 v1.0 §4.2 — Hard Physical Deletion):
+//! 보존 기한 만료 시 `remove()` 반복 호출로 파편화를 유발하지 않고,
+//! 시간 디렉터리 자체를 OS 레벨에서 삭제(unlink)한다.
+//!
+//! 레이아웃: `<root>/hour-<unix_hour>/seg-<unix_millis>.tvim`
+
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result};
+
+pub struct ChunkStore {
+    root: PathBuf,
+}
+
+impl ChunkStore {
+    pub fn new(root: impl AsRef<Path>) -> Result<Self> {
+        let root = root.as_ref().to_path_buf();
+        std::fs::create_dir_all(&root)
+            .with_context(|| format!("청크 루트 생성 실패: {}", root.display()))?;
+        Ok(Self { root })
+    }
+
+    /// 주어진 시각의 세그먼트 경로를 만들고 시간 디렉터리를 보장한다.
+    pub fn segment_path(&self, unix_millis: i64) -> Result<PathBuf> {
+        let hour = unix_millis / 3_600_000;
+        let dir = self.root.join(format!("hour-{hour}"));
+        std::fs::create_dir_all(&dir)?;
+        Ok(dir.join(format!("seg-{unix_millis}.tvim")))
+    }
+
+    /// 보존 기한이 지난 시간 디렉터리를 통째로 삭제한다. 삭제한 디렉터리 수 반환.
+    pub fn sweep(&self, retention_hours: u64, now_millis: i64) -> Result<usize> {
+        let current_hour = now_millis / 3_600_000;
+        let cutoff = current_hour - retention_hours as i64;
+        let mut removed = 0;
+        for entry in std::fs::read_dir(&self.root)? {
+            let entry = entry?;
+            let name = entry.file_name();
+            let Some(hour) = name
+                .to_str()
+                .and_then(|n| n.strip_prefix("hour-"))
+                .and_then(|h| h.parse::<i64>().ok())
+            else {
+                continue; // 형식이 다른 항목은 건드리지 않음
+            };
+            if hour < cutoff {
+                std::fs::remove_dir_all(entry.path())
+                    .with_context(|| format!("청크 삭제 실패: {}", entry.path().display()))?;
+                removed += 1;
+            }
+        }
+        Ok(removed)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn segment_layout_and_sweep() {
+        let root = std::env::temp_dir().join(format!("turbolog_chunks_{}", std::process::id()));
+        std::fs::remove_dir_all(&root).ok();
+        let store = ChunkStore::new(&root).unwrap();
+
+        let now: i64 = 1_770_000_000_000; // 임의 기준 시각 (ms)
+        let old = now - 10 * 3_600_000; // 10시간 전
+        let p_now = store.segment_path(now).unwrap();
+        let p_old = store.segment_path(old).unwrap();
+        std::fs::write(&p_now, b"x").unwrap();
+        std::fs::write(&p_old, b"x").unwrap();
+        assert_ne!(p_now.parent(), p_old.parent(), "다른 시간 디렉터리");
+
+        // 보존 7시간 → 10시간 전 디렉터리만 unlink
+        let removed = store.sweep(7, now).unwrap();
+        assert_eq!(removed, 1);
+        assert!(p_now.exists());
+        assert!(!p_old.exists());
+        std::fs::remove_dir_all(&root).ok();
+    }
+}

@@ -187,6 +187,11 @@ impl VectorCache {
         Ok((parsed, vector))
     }
 
+    /// 검색 쿼리용 임베딩 — 쿼리는 템플릿이 아니므로 캐시를 거치지 않는다.
+    pub fn embed_uncached(&mut self, text: &str) -> Result<Vec<f32>> {
+        self.embedder.embed(text)
+    }
+
     pub fn hits(&self) -> u64 {
         self.hits
     }
