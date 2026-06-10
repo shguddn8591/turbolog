@@ -27,8 +27,11 @@ cargo test                    # 모델 없으면 통합 테스트는 skip
 - [x] **Phase 1 — Core Bindings & Cache**: Drain 파서(`drain-rs`), LRU 캐시,
       CPU(ONNX) 임베딩 파이프라인 (`src/ingest.rs`)
       — 통합 테스트: 합성 로그 100건, 캐시 히트율 95%, 384차원 L2 정규화 검증
-- [ ] **Phase 2 — Ping-Pong & Centroid**: `arc-swap` 기반 Read/Write 인덱스 격리,
-      K-Centroid Tier 1 + turbovec `IdMapIndex` allowlist Tier 2 (`src/index.rs`, `src/detect.rs` 골격)
+- [x] **Phase 2 — Ping-Pong & Centroid**: `arc-swap` 기반 Read/Write 인덱스 격리
+      (`src/index.rs` — 봉인 윈도우 발행, .tvim 청크 백업), K-Centroid Tier 1 +
+      turbovec `IdMapIndex` allowlist Tier 2 (`src/detect.rs`)
+      — 동시성(ingest/search/swap 3-스레드) 및 E2E 로그 이상 탐지 테스트 통과.
+      검색 스냅샷은 직전 봉인 윈도우(10초)를 담으며, 이력 검색은 Phase 3 청크가 담당
 - [ ] **Phase 3 — Persistence & API**: WAL 장애 복구, HTTP/gRPC 인터페이스
 
 ## 시스템 제약 (스펙 v1.0 §4)

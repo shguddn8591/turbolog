@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 
-use turbolog::{Embedder, VectorCache};
+use turbolog::{AnomalyDetector, DetectionResult, Embedder, PingPongIndexer, VectorCache};
 
 fn models_dir() -> Option<PathBuf> {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("models");
@@ -77,4 +77,58 @@ fn cache_hit_skips_embedding() {
     assert_eq!(cache.hits(), 1, "두 번째 인입은 캐시 히트");
     assert_eq!(cache.misses(), 1, "임베딩 추가 호출 없음");
     assert!(std::sync::Arc::ptr_eq(&va, &vb), "동일 캐시 엔트리 공유");
+}
+
+/// E2E: 로그 텍스트 → 임베딩 → 인덱싱 → 2-tier 이상 탐지.
+#[test]
+fn end_to_end_anomaly_detection() {
+    let Some(dir) = models_dir() else {
+        eprintln!("skip: models/ 없음 — ./scripts/download_model.sh 먼저 실행");
+        return;
+    };
+    let embedder = Embedder::new(dir.join("model.onnx"), dir.join("tokenizer.json")).unwrap();
+    let mut cache = VectorCache::new(embedder);
+
+    // 1) 정상 로그 인입 → 벡터 수집 + 핑퐁 인덱싱
+    let indexer = PingPongIndexer::new(384, 4).unwrap();
+    let mut normal_flat: Vec<f32> = Vec::new();
+    let mut next_id = 0u64;
+    for log in synthetic_logs() {
+        let (parsed, vector) = cache.get_or_embed(&log).unwrap();
+        next_id += 1;
+        indexer.ingest(next_id, &vector).unwrap();
+        // 템플릿당 1회만 캘리브레이션 셋에 추가 (miss 시점 = 새 템플릿)
+        let _ = parsed;
+        if cache.misses() as usize * 384 > normal_flat.len() {
+            normal_flat.extend_from_slice(&vector);
+        }
+    }
+    indexer.swap_and_flush(None).unwrap();
+    let snapshot = indexer.get_search_index();
+
+    // 2) 정상 템플릿 5종으로 centroid 동결 (k=5)
+    let detector = AnomalyDetector::fit(&normal_flat, 384, 5, 0.5);
+
+    // 3) 정상 로그 재인입 → Tier 1 즉시 통과
+    let (_p, v) = cache.get_or_embed("disk usage at 77 percent on /var").unwrap();
+    assert!(
+        matches!(detector.detect(&v, &snapshot), DetectionResult::Normal),
+        "기존 템플릿 로그는 Normal"
+    );
+
+    // 4) 처음 보는 치명적 로그 → Anomaly + 유사 사건 컨텍스트
+    let (_p, v) = cache
+        .get_or_embed("FATAL kernel panic at address 0xdeadbeef, halting node")
+        .unwrap();
+    match detector.detect(&v, &snapshot) {
+        DetectionResult::Anomaly {
+            score,
+            nearest_incidents,
+        } => {
+            assert!(score > 0.5, "score={score}");
+            assert!(!nearest_incidents.is_empty(), "최근 윈도우 유사 맥락 확보");
+            println!("이상 탐지: score={score:.3}, 유사 사건={nearest_incidents:?}");
+        }
+        DetectionResult::Normal => panic!("치명적 로그가 Normal로 분류됨"),
+    }
 }
