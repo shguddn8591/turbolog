@@ -29,7 +29,11 @@ fn make_line(i: usize) -> String {
         6 => format!("gc pause of {} ms in region old-gen", i % 300),
         7 => format!("tcp retransmit count {} on eth0", i % 99),
         8 => format!("query plan hash {} executed in {} ms", i * 31, i % 50),
-        _ => format!("session {} renewed token expiring in {} s", i, 3600 - i % 600),
+        _ => format!(
+            "session {} renewed token expiring in {} s",
+            i,
+            3600 - i % 600
+        ),
     }
 }
 
@@ -39,7 +43,10 @@ fn unit_vec(seed: usize, dim: usize) -> Vec<f32> {
     let mut v: Vec<f32> = (0..dim)
         .map(|j| {
             // LCG 기반 결정론적 난수
-            let x = (seed.wrapping_mul(6364136223846793005).wrapping_add(j.wrapping_mul(2891336453)) >> 16) as f32;
+            let x = (seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(j.wrapping_mul(2891336453))
+                >> 16) as f32;
             (x / u32::MAX as f32) * 2.0 - 1.0
         })
         .collect();
@@ -113,7 +120,7 @@ fn bench_template_cache_hit(c: &mut Criterion) {
 fn bench_anomaly_detector(c: &mut Criterion) {
     const DIM: usize = 384;
     const N: usize = 200; // fit용 샘플 수
-    const K: usize = 10;  // 센트로이드 수
+    const K: usize = 10; // 센트로이드 수
 
     // 합성 n×dim flat 벡터
     let flat: Vec<f32> = (0..N).flat_map(|i| unit_vec(i, DIM)).collect();
@@ -183,17 +190,14 @@ fn bench_pingpong_indexer(c: &mut Criterion) {
     idx.swap_and_flush(None).unwrap();
 
     group.throughput(Throughput::Elements(100));
-    group.bench_function(
-        BenchmarkId::new("search", format!("n{INGEST_N}_k5")),
-        |b| {
-            b.iter(|| {
-                for _ in 0..100 {
-                    let search_idx = idx.get_search_index();
-                    let _ = search_idx.search(&query, 5);
-                }
-            })
-        },
-    );
+    group.bench_function(BenchmarkId::new("search", format!("n{INGEST_N}_k5")), |b| {
+        b.iter(|| {
+            for _ in 0..100 {
+                let search_idx = idx.get_search_index();
+                let _ = search_idx.search(&query, 5);
+            }
+        })
+    });
 
     group.finish();
 }

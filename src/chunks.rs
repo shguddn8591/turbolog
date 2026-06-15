@@ -17,8 +17,12 @@ pub struct ChunkStore {
 impl ChunkStore {
     pub fn new(root: impl AsRef<Path>) -> Result<Self> {
         let root = root.as_ref().to_path_buf();
-        std::fs::create_dir_all(&root)
-            .with_context(|| format!("Failed to create chunk root directory at {}", root.display()))?;
+        std::fs::create_dir_all(&root).with_context(|| {
+            format!(
+                "Failed to create chunk root directory at {}",
+                root.display()
+            )
+        })?;
         Ok(Self { root })
     }
 
@@ -46,8 +50,12 @@ impl ChunkStore {
                 continue; // Do not touch entries with unmatched format layouts
             };
             if hour < cutoff {
-                std::fs::remove_dir_all(entry.path())
-                    .with_context(|| format!("Failed to delete chunk directory at {}", entry.path().display()))?;
+                std::fs::remove_dir_all(entry.path()).with_context(|| {
+                    format!(
+                        "Failed to delete chunk directory at {}",
+                        entry.path().display()
+                    )
+                })?;
                 removed += 1;
             }
         }
@@ -71,7 +79,11 @@ mod tests {
         let p_old = store.segment_path(old).unwrap();
         std::fs::write(&p_now, b"x").unwrap();
         std::fs::write(&p_old, b"x").unwrap();
-        assert_ne!(p_now.parent(), p_old.parent(), "Segments must reside in different hourly directories");
+        assert_ne!(
+            p_now.parent(),
+            p_old.parent(),
+            "Segments must reside in different hourly directories"
+        );
 
         // Retention set to 7 hours -> only the segment from 10 hours ago is deleted.
         let removed = store.sweep(7, now).unwrap();

@@ -1,23 +1,39 @@
-//! TurboLog server daemon.
+//! TurboLog binary entry point — subcommands: serve (default), watch, scan, ui.
 //!
-//! TurboLog Server Daemon.
-//!
-//! Environment Variables: TURBOLOG_PORT (default: 8087), TURBOLOG_DATA_DIR (default: ./data),
-//! TURBOLOG_MODEL_DIR (default: ./models), TURBOLOG_EMBEDDERS (default: 2)
+//! Environment Variables (serve mode):
+//!   TURBOLOG_PORT       (default: 8087)
+//!   TURBOLOG_DATA_DIR   (default: ./data)
+//!   TURBOLOG_MODEL_DIR  (default: ./models)
+//!   TURBOLOG_EMBEDDERS  (default: 2)
+//!   TURBOLOG_AUTH_TOKEN (optional)
 
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use clap::Parser;
+
+use turbolog::cli::{Cli, Command};
+use turbolog::embedded::make_embedder;
 use turbolog::engine::{EngineConfig, TurboLogEngine};
 use turbolog::http::run_server;
-use turbolog::Embedder;
+use turbolog::pipeline::LocalPipeline;
 
 fn env_or(key: &str, default: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| default.to_string())
 }
 
 fn main() -> anyhow::Result<()> {
+    let cli = Cli::parse();
+    match cli.command.unwrap_or(Command::Serve) {
+        Command::Serve => run_serve(),
+        Command::Watch { threshold } => run_watch_cmd(threshold),
+        Command::Scan { format } => run_scan_cmd(&format),
+        Command::Ui { server, standalone } => run_ui_cmd(&server, standalone),
+    }
+}
+
+fn run_serve() -> anyhow::Result<()> {
     let port = env_or("TURBOLOG_PORT", "8087");
     let model_dir = PathBuf::from(env_or("TURBOLOG_MODEL_DIR", "./models"));
     let cfg = EngineConfig {
@@ -25,19 +41,16 @@ fn main() -> anyhow::Result<()> {
         ..EngineConfig::default()
     };
 
-    // Embedder pool: bounds parallel cache-miss inference (each slot ≈ 90 MB ONNX session).
-    let pool_size: usize = env_or("TURBOLOG_EMBEDDERS", "2").parse().unwrap_or(2).max(1);
+    let pool_size: usize = env_or("TURBOLOG_EMBEDDERS", "2")
+        .parse()
+        .unwrap_or(2)
+        .max(1);
     let embedders = (0..pool_size)
-        .map(|_| {
-            Embedder::new(
-                model_dir.join("model.onnx"),
-                model_dir.join("tokenizer.json"),
-            )
-        })
+        .map(|_| make_embedder(&model_dir))
         .collect::<anyhow::Result<Vec<_>>>()?;
     let engine = Arc::new(TurboLogEngine::open(cfg, embedders)?);
 
-    // Swap Daemon: Seals window every 10s + unlinks expired retention chunks every hour
+    // Swap Daemon: seals window every 10s, sweeps expired retention chunks every hour.
     {
         let engine = Arc::clone(&engine);
         std::thread::spawn(move || {
@@ -64,12 +77,33 @@ fn main() -> anyhow::Result<()> {
         });
     }
 
-    // Optional bearer-token auth — leave unset only on trusted networks.
-    let auth_token = std::env::var("TURBOLOG_AUTH_TOKEN").ok().filter(|t| !t.is_empty());
+    let auth_token = std::env::var("TURBOLOG_AUTH_TOKEN")
+        .ok()
+        .filter(|t| !t.is_empty());
     let (addr, handles) = run_server(engine, &format!("0.0.0.0:{port}"), 4, auth_token)?;
     println!("TurboLog listening on http://{addr}");
     for handle in handles {
         let _ = handle.join();
     }
     Ok(())
+}
+
+fn run_watch_cmd(threshold: Option<f32>) -> anyhow::Result<()> {
+    let model_dir = PathBuf::from(env_or("TURBOLOG_MODEL_DIR", "./models"));
+    let embedder = make_embedder(&model_dir)?;
+    let mut pipeline = LocalPipeline::new(embedder);
+    eprintln!("[turbolog] streaming anomaly detection active (calibrating on first 64 templates)");
+    turbolog::watch::run_watch(&mut pipeline, threshold)
+}
+
+fn run_scan_cmd(format: &str) -> anyhow::Result<()> {
+    let model_dir = PathBuf::from(env_or("TURBOLOG_MODEL_DIR", "./models"));
+    let embedder = make_embedder(&model_dir)?;
+    let mut pipeline = LocalPipeline::new(embedder);
+    turbolog::scan::run_scan(&mut pipeline, format)
+}
+
+fn run_ui_cmd(server: &str, standalone: bool) -> anyhow::Result<()> {
+    let _ = (server, standalone);
+    anyhow::bail!("TUI support is not compiled in. Rebuild with:\n  cargo build --features tui")
 }

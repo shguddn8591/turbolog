@@ -5,13 +5,18 @@
 //! Ingest → Parse(Drain) → Embed(Cache/ONNX) → Tier 1/2 Detection → Ping-Pong Indexing → Flush
 
 pub mod chunks;
+pub mod cli;
 pub mod detect;
+pub mod embedded;
 pub mod engine;
 pub mod http;
 pub mod index;
-pub mod metrics;
 pub mod ingest;
+pub mod metrics;
+pub mod pipeline;
+pub mod scan;
 pub mod wal;
+pub mod watch;
 
 pub use detect::{AnomalyDetector, DetectionResult};
 pub use engine::{EngineConfig, TurboLogEngine};

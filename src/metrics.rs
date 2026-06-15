@@ -56,8 +56,8 @@ pub fn inflight_dec() {
 // ── Latency histograms ───────────────────────────────────────────────────────
 /// Bucket upper bounds in seconds (Prometheus `le`), spanning 50µs … 5s.
 const BUCKETS: [f64; 16] = [
-    0.00005, 0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5,
-    1.0, 2.5, 5.0,
+    0.00005, 0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0,
+    2.5, 5.0,
 ];
 
 /// Fixed-bucket latency histogram. Each `observe` increments exactly one bucket
@@ -136,15 +136,58 @@ fn gauge(out: &mut String, name: &str, help: &str, value: f64) {
 /// stats (cache hit rate, ring depth) as `(name, help, value)` tuples.
 pub fn render(extra_gauges: &[(&str, &str, f64)]) -> String {
     let mut out = String::with_capacity(4096);
-    counter(&mut out, "turbolog_ingested_total", "Logs ingested", INGESTED.load(Ordering::Relaxed));
-    counter(&mut out, "turbolog_anomalies_total", "Anomalies detected", ANOMALIES.load(Ordering::Relaxed));
-    counter(&mut out, "turbolog_http_requests_2xx_total", "HTTP 2xx responses", HTTP_2XX.load(Ordering::Relaxed));
-    counter(&mut out, "turbolog_http_requests_4xx_total", "HTTP 4xx responses", HTTP_4XX.load(Ordering::Relaxed));
-    counter(&mut out, "turbolog_http_requests_5xx_total", "HTTP 5xx responses", HTTP_5XX.load(Ordering::Relaxed));
-    counter(&mut out, "turbolog_http_rejected_total", "Requests shed by backpressure", HTTP_REJECTED.load(Ordering::Relaxed));
-    gauge(&mut out, "turbolog_inflight_requests", "In-flight HTTP requests", INFLIGHT.load(Ordering::Relaxed) as f64);
-    INGEST_HIST.render("turbolog_ingest_latency_seconds", "Ingest path latency", &mut out);
-    SEARCH_HIST.render("turbolog_search_latency_seconds", "Search path latency", &mut out);
+    counter(
+        &mut out,
+        "turbolog_ingested_total",
+        "Logs ingested",
+        INGESTED.load(Ordering::Relaxed),
+    );
+    counter(
+        &mut out,
+        "turbolog_anomalies_total",
+        "Anomalies detected",
+        ANOMALIES.load(Ordering::Relaxed),
+    );
+    counter(
+        &mut out,
+        "turbolog_http_requests_2xx_total",
+        "HTTP 2xx responses",
+        HTTP_2XX.load(Ordering::Relaxed),
+    );
+    counter(
+        &mut out,
+        "turbolog_http_requests_4xx_total",
+        "HTTP 4xx responses",
+        HTTP_4XX.load(Ordering::Relaxed),
+    );
+    counter(
+        &mut out,
+        "turbolog_http_requests_5xx_total",
+        "HTTP 5xx responses",
+        HTTP_5XX.load(Ordering::Relaxed),
+    );
+    counter(
+        &mut out,
+        "turbolog_http_rejected_total",
+        "Requests shed by backpressure",
+        HTTP_REJECTED.load(Ordering::Relaxed),
+    );
+    gauge(
+        &mut out,
+        "turbolog_inflight_requests",
+        "In-flight HTTP requests",
+        INFLIGHT.load(Ordering::Relaxed) as f64,
+    );
+    INGEST_HIST.render(
+        "turbolog_ingest_latency_seconds",
+        "Ingest path latency",
+        &mut out,
+    );
+    SEARCH_HIST.render(
+        "turbolog_search_latency_seconds",
+        "Search path latency",
+        &mut out,
+    );
     for (name, help, value) in extra_gauges {
         gauge(&mut out, name, help, *value);
     }

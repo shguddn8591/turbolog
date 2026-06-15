@@ -94,6 +94,16 @@ impl Embedder {
         Ok(Self { session, tokenizer })
     }
 
+    /// Creates an Embedder from raw bytes — enables single-binary distribution via `include_bytes!`.
+    pub fn from_bytes(model_bytes: &[u8], tokenizer_bytes: &[u8]) -> Result<Self> {
+        let session = Session::builder()?
+            .commit_from_memory(model_bytes)
+            .context("Failed to load ONNX model from bytes")?;
+        let tokenizer = Tokenizer::from_bytes(tokenizer_bytes)
+            .map_err(|e| anyhow!("Failed to load tokenizer from bytes: {e}"))?;
+        Ok(Self { session, tokenizer })
+    }
+
     pub fn embed(&mut self, text: &str) -> Result<Vec<f32>> {
         let encoding = self
             .tokenizer
@@ -251,7 +261,8 @@ impl VectorCache {
             return Ok((parsed, vector));
         }
         let vector: Arc<[f32]> = self.embedder.embed(&parsed.template)?.into();
-        self.templates.insert(parsed.template_id, Arc::clone(&vector));
+        self.templates
+            .insert(parsed.template_id, Arc::clone(&vector));
         Ok((parsed, vector))
     }
 

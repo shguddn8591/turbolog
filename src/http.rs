@@ -46,7 +46,8 @@ pub fn run_server(
     workers: usize,
     auth_token: Option<String>,
 ) -> Result<(SocketAddr, Vec<JoinHandle<()>>)> {
-    let server = Arc::new(Server::http(addr).map_err(|e| anyhow!("Failed to bind HTTP server: {e}"))?);
+    let server =
+        Arc::new(Server::http(addr).map_err(|e| anyhow!("Failed to bind HTTP server: {e}"))?);
     let local = server
         .server_addr()
         .to_ip()
@@ -91,7 +92,11 @@ fn handle(engine: &TurboLogEngine, auth_token: Option<&str>, mut request: Reques
         .read_to_string(&mut body)
         .is_err()
     {
-        respond(request, 400, json!({"error": "Failed to read request body"}));
+        respond(
+            request,
+            400,
+            json!({"error": "Failed to read request body"}),
+        );
         return;
     }
     if body.len() as u64 > MAX_BODY_BYTES {

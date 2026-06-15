@@ -257,8 +257,7 @@ impl TurboLogEngine {
             None => {
                 // Expensive path OUTSIDE the cache lock: a miss storm serializes here
                 // (per pool slot) while cache hits keep flowing.
-                let vector: Arc<[f32]> =
-                    self.with_embedder(|e| e.embed(&parsed.template))?.into();
+                let vector: Arc<[f32]> = self.with_embedder(|e| e.embed(&parsed.template))?.into();
                 self.templates
                     .lock()
                     .unwrap()
@@ -369,9 +368,12 @@ impl TurboLogEngine {
             // Outside the lock: pre-build search caches, flush the segment, then publish.
             sealed.prepare();
             let segment = self.chunks.segment_path(now_millis() + i as i64)?;
-            sealed
-                .write(&segment)
-                .with_context(|| format!("Failed to backup chunk to {} (shard {i})", segment.display()))?;
+            sealed.write(&segment).with_context(|| {
+                format!(
+                    "Failed to backup chunk to {} (shard {i})",
+                    segment.display()
+                )
+            })?;
             std::fs::remove_file(&sealed_wal).ok();
 
             let sealed = Arc::new(sealed);
