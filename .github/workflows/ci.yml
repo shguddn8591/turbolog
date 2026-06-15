@@ -11,12 +11,11 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true # Cancel previous runs on the same branch to save resources
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  # ONNX model cache key (update when the model URL changes)
   MODEL_CACHE_KEY: onnx-minilm-v2-rev1
 
 # ─────────────────────────── Jobs ───────────────────────────
@@ -53,7 +52,7 @@ jobs:
       - name: rustfmt
         run: cargo fmt --all -- --check
 
-      - name: clippy (all targets)
+      - name: clippy (all targets + all features)
         run: cargo clippy --all-targets --all-features -- -D warnings
 
       - name: Check for TODO/FIXME in src
@@ -62,7 +61,18 @@ jobs:
           grep -rn 'TODO\|FIXME\|HACK\|XXX' src/ || echo "✅ Clean — no TODO markers found"
           echo "::endgroup::"
 
-  # ② Unit Tests (cross-platform) ─────────────────────────────
+  # ② Dependency Audit (cargo-deny) ─────────────────────────
+  audit:
+    name: Dependency Audit (cargo-deny)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+          arguments: --all-features
+
+  # ③ Unit & Integration Tests (cross-platform, cargo-nextest) ──
   test:
     name: Test (${{ matrix.os }}, rust-${{ matrix.rust }})
     needs: lint
@@ -73,7 +83,6 @@ jobs:
         os: [ ubuntu-latest, macos-latest ]
         rust: [ stable, beta ]
         exclude:
-          # Validate beta only on Ubuntu — macOS beta runs are not cost-effective
           - os: macos-latest
             rust: beta
     steps:
@@ -102,14 +111,17 @@ jobs:
       - name: Download ONNX models (if not cached)
         run: bash scripts/download_model.sh
 
-      - name: Build (check compilation)
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Build (all features)
         run: cargo build --all-features
 
-      - name: Run unit tests
-        run: cargo test --lib --all-features
+      - name: Run unit tests (nextest)
+        run: cargo nextest run --lib --all-features --profile ci
 
-      - name: Run integration tests
-        run: cargo test --tests --all-features
+      - name: Run integration tests (nextest)
+        run: cargo nextest run --tests --all-features --profile ci
         env:
           RUST_LOG: turbolog=debug
 
@@ -173,7 +185,7 @@ jobs:
       - name: Coverage summary (inline)
         run: cargo llvm-cov --all-features --workspace --text | head -60
 
-  # ⑥ Leak / UB Sanitizer (Miri) ───────────────────────────
+  # ⑥ Miri (UB detection on pure-Rust code) ─────────────────
   miri:
     name: Miri (UB detection)
     needs: lint
@@ -206,7 +218,7 @@ jobs:
         env:
           MIRIFLAGS: -Zmiri-disable-isolation
 
-  # ⑦ Binary build check (release profile) ──────────────────
+  # ⑦ Release Build (base + embedded + tui) ─────────────────
   release-build:
     name: Release Build
     needs: test
@@ -234,16 +246,22 @@ jobs:
       - name: Download ONNX models (if not cached)
         run: bash scripts/download_model.sh
 
-      - name: Build release binary
+      - name: Build release binary (base)
+        run: cargo build --release
+
+      - name: Build release binary (all features)
         run: cargo build --release --all-features
 
-      - name: Verify binary runs (--help or quick smoke)
+      - name: Build release binary (embedded model + tui)
+        run: cargo build --release --features embedded-model,tui
+
+      - name: Verify binary runs (--help smoke test)
         run: |
-          # Verify the binary is compiled and linked properly
           file target/release/turbolog
           ls -lh target/release/turbolog
+          target/release/turbolog --help
 
-      - name: Upload release binary
+      - name: Upload release binary (all-features)
         uses: actions/upload-artifact@v4
         with:
           name: turbolog-linux-amd64

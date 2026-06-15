@@ -1,0 +1,8 @@
+[profile.default]
+retries = 1
+
+[profile.ci]
+retries = 2
+test-threads = 4
+# Fail fast on the first test failure in CI to keep logs clean.
+fail-fast = false
