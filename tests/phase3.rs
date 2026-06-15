@@ -253,7 +253,7 @@ fn sealed_wal_leftover_recovery() {
         TurboLogEngine::open(test_config(data_dir.clone()), vec![make_embedder(&models)]).unwrap();
     assert_eq!(engine.stats().pending_window_len, 4, "sealed 잔여물 복구");
     // 통합 후: 잔여 파일은 사라지고 활성 WAL에 4건이 재영속화됨
-    assert!(!data_dir.join("wal-sealed-99.bin").exists());
+    assert!(!data_dir.join("wal-0-sealed-99.bin").exists());
     assert_eq!(
         turbolog::Wal::replay(data_dir.join("wal-0.bin"), 384)
             .unwrap()
