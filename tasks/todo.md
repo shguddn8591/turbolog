@@ -1,3 +1,50 @@
+# TurboLog — Phase 4: 프로덕션 하드닝 (100만 동시접속)
+
+> 목표: 100만 동시접속 서비스에서 적극 사용 가능한 프로덕션 레벨.
+> 전략: 공유 계약(metrics API) 동결 → 파일 소유권 비중첩 4개 워크스트림 병렬(sonnet) → 통합 검증.
+
+## 진단 (병목 우선순위)
+- **P0 처리량**: `wal: Mutex<Wal>` 단일 글로벌 쓰기 락이 모든 인입 직렬화 → 샤딩.
+- **P0 관측성**: Prometheus/health/ready 부재 → 운영 불가.
+- **P1 회복성**: 백프레셔/타임아웃/그레이스풀 셧다운 부재.
+- **P1 배포**: Docker/k8s/HPA 부재 (100만 = N 레플리카 수평확장).
+- **P2 검증**: criterion 벤치·SLO 문서 부재.
+
+## 계약 동결 (선행, 내가 직접)
+- [ ] `src/metrics.rs` — 프로세스 전역 Prometheus 텍스트 노출(의존성 0). 모든 에이전트가 호출.
+- [ ] `Cargo.toml` — signal-hook, criterion(dev)+`[[bench]]`, `[profile.release]` lto.
+- [ ] `src/lib.rs` — `pub mod metrics;` 선언.
+
+## WS1 — 샤딩 인입 엔진 (engine.rs, index.rs, wal.rs)
+- [ ] N 샤드: 샤드별 `Wal` + `PingPongIndexer` (글로벌 락 제거)
+- [ ] 샤드별 swap_tick / 멀티샤드 크래시 복구 / 검색 N샤드×링 병합
+- [ ] 공개 API(open/ingest_log/search_text/swap_tick/sweep_chunks/stats) 불변
+- [ ] 메트릭 계측: ingest count/latency, anomaly
+- [ ] 기존 19 테스트 전부 녹색 유지
+
+## WS3 — HTTP 엣지 회복성 (http.rs)
+- [ ] `/health`(liveness), `/ready`(readiness), `/metrics`(Prometheus)
+- [ ] 인플라이트 백프레셔(초과 시 503) + 요청 본문 read 타임아웃
+- [ ] `ServerConfig` 도입(addr/workers/auth/max_inflight/shutdown)
+- [ ] 요청 메트릭 계측(2xx/4xx/5xx/rejected/inflight)
+
+## WS4 — 배포·운영 (신규 파일만)
+- [ ] 멀티스테이지 `Dockerfile`(non-root, distroless/slim) + `.dockerignore`
+- [ ] `deploy/k8s/`: Deployment/Service/HPA/PDB/ConfigMap (probe→/ready,/health)
+- [ ] `deploy/docker-compose.yml` + `docs/OPERATIONS.md`(100만 수평확장 토폴로지·TLS@ingress)
+
+## WS5 — 벤치마크·SLO (신규 파일 위주)
+- [ ] `benches/throughput.rs` criterion (모델 비의존: parse/cache/detect/fnv)
+- [ ] `examples/loadtest.rs` 멀티스레드 경합 인입 측정 추가
+- [ ] `docs/SLO.md`: 지연/처리량 목표 + 측정 결과
+
+## 통합·검증 (선행 의존, 내가 직접)
+- [ ] run_server 콜사이트(main.rs/loadtest) 정합 + SIGTERM 그레이스풀 셧다운
+- [ ] `cargo build/test/clippy` 녹색 + loadtest 실증
+- [ ] tasks/lessons.md 갱신
+
+---
+
 # TurboLog — Phase 1 체크리스트
 
 ## 스캐폴드

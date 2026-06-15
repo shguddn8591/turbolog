@@ -9,6 +9,7 @@ pub mod detect;
 pub mod engine;
 pub mod http;
 pub mod index;
+pub mod metrics;
 pub mod ingest;
 pub mod wal;
 
