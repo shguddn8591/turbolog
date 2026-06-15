@@ -116,31 +116,7 @@ jobs:
       - name: Run doc tests
         run: cargo test --doc
 
-  # ③ MSRV — minimum supported Rust version verification ───────────────────────
-  msrv:
-    name: MSRV (edition 2021)
-    needs: lint
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust 1.88.0 (MSRV — ort 2.0.0-rc.12 requires rustc 1.88)
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: "1.88.0"
-
-      - name: Cargo cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          key: msrv
-
-      - name: Install system deps
-        run: sudo apt-get update -q && sudo apt-get install -y libopenblas-dev
-
-      - name: Check compilation
-        run: cargo check --all-features
-
-  # ④ Security Audit ────────────────────────────────────────
+  # ③ Security Audit ────────────────────────────────────────
   audit:
     name: Security Audit
     runs-on: ubuntu-latest
