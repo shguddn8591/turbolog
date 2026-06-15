@@ -20,6 +20,11 @@ signal-hook = "0.3"
 
 [dev-dependencies]
 ureq = { version = "2", features = ["json"] }
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "throughput"
+harness = false
 
 [profile.release]
 lto = true
