@@ -32,7 +32,8 @@ pub fn inc_http(status: u16) {
     let counter = match status {
         200..=299 => &HTTP_2XX,
         400..=499 => &HTTP_4XX,
-        _ => &HTTP_5XX,
+        500..=599 => &HTTP_5XX,
+        _ => return,
     };
     counter.fetch_add(1, Ordering::Relaxed);
 }
