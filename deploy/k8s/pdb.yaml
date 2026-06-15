@@ -1,0 +1,24 @@
+---
+# TurboLog PodDisruptionBudget
+#
+# 롤링 업데이트, 노드 드레인, 클러스터 업그레이드 중에
+# 최소 4개의 레플리카가 항상 서비스 가능 상태를 유지하도록 보장한다.
+#
+# min 6 레플리카 기준:
+#   minAvailable: 4 → 최대 2개 동시 중단 허용
+#   Deployment rollingUpdate.maxUnavailable: 2 와 일치시킨다.
+#
+# AZ 3개 운영 시: 4개 가용 = AZ당 최소 1개 이상 + 여유 1개 확보.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: turbolog
+  namespace: turbolog
+  labels:
+    app.kubernetes.io/name: turbolog
+    app.kubernetes.io/component: pdb
+spec:
+  minAvailable: 4
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: turbolog

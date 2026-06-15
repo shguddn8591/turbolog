@@ -1,0 +1,73 @@
+---
+# TurboLog — 단일 노드 로컬 실행용 Docker Compose
+#
+# 사용법:
+#   # 모델 파일을 ./models/ 에 미리 준비한다 (model.onnx, tokenizer.json)
+#   docker compose up --build
+#
+# 모델 파일 준비 예시:
+#   mkdir -p models
+#   # 내부 아티팩트 스토리지 또는 직접 복사
+#   # cp /path/to/model.onnx ./models/
+#   # cp /path/to/tokenizer.json ./models/
+#
+# 환경변수는 .env 파일로 오버라이드 가능:
+#   TURBOLOG_AUTH_TOKEN=mysecret docker compose up
+
+services:
+  turbolog:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: turbolog:local
+    container_name: turbolog
+    restart: unless-stopped
+
+    ports:
+      - "8087:8087"
+
+    environment:
+      TURBOLOG_PORT: "8087"
+      TURBOLOG_DATA_DIR: "/data"
+      TURBOLOG_MODEL_DIR: "/models"
+      TURBOLOG_EMBEDDERS: "2"
+      # 로컬 테스트용 최대 인-플라이트 (운영은 더 높게)
+      TURBOLOG_MAX_INFLIGHT: "200"
+      # 인증 토큰 (비워 두면 무인증 모드)
+      TURBOLOG_AUTH_TOKEN: "${TURBOLOG_AUTH_TOKEN:-}"
+
+    volumes:
+      # WAL + 인덱스 스냅샷 영속화
+      - turbolog-data:/data
+      # 모델 파일 — 호스트의 ./models/ 디렉터리를 읽기전용으로 마운트
+      # 파일이 없으면 컨테이너가 시작되지만 임베딩이 실패한다
+      - ./models:/models:ro
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8087/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+    # non-root 실행
+    user: "10001:10001"
+
+    # 읽기 전용 루트 파일시스템
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+
+    # 리소스 제한 (로컬 환경 기준; 필요에 따라 조정)
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: "768m"
+        reservations:
+          cpus: "0.5"
+          memory: "512m"
+
+volumes:
+  turbolog-data:
+    driver: local
