@@ -368,7 +368,7 @@ impl TurboLogEngine {
 
             // Outside the lock: pre-build search caches, flush the segment, then publish.
             sealed.prepare();
-            let segment = self.chunks.segment_path(now_millis())?;
+            let segment = self.chunks.segment_path(now_millis() + i as i64)?;
             sealed
                 .write(&segment)
                 .with_context(|| format!("Failed to backup chunk to {} (shard {i})", segment.display()))?;
