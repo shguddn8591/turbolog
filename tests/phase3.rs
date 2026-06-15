@@ -29,6 +29,7 @@ fn test_config(data_dir: PathBuf) -> EngineConfig {
         calibration_templates: 5,
         centroids: 5,
         ring_windows: 4,
+        shards: 1,
         ..EngineConfig::default()
     }
 }
@@ -66,7 +67,7 @@ fn wal_crash_recovery() {
         .unwrap();
     assert!(!hits.is_empty(), "복구된 벡터가 검색됨");
     assert_eq!(
-        turbolog::Wal::replay(data_dir.join("wal.bin"), 384)
+        turbolog::Wal::replay(data_dir.join("wal-0.bin"), 384)
             .unwrap()
             .len(),
         0
@@ -243,8 +244,8 @@ fn sealed_wal_leftover_recovery() {
     }
     // 봉인 직후 크래시 흉내: 활성 WAL을 sealed 파일로 rename만 해 둔다
     std::fs::rename(
-        data_dir.join("wal.bin"),
-        data_dir.join("wal-sealed-99.bin"),
+        data_dir.join("wal-0.bin"),
+        data_dir.join("wal-0-sealed-99.bin"),
     )
     .unwrap();
 
@@ -252,9 +253,9 @@ fn sealed_wal_leftover_recovery() {
         TurboLogEngine::open(test_config(data_dir.clone()), vec![make_embedder(&models)]).unwrap();
     assert_eq!(engine.stats().pending_window_len, 4, "sealed 잔여물 복구");
     // 통합 후: 잔여 파일은 사라지고 활성 WAL에 4건이 재영속화됨
-    assert!(!data_dir.join("wal-sealed-99.bin").exists());
+    assert!(!data_dir.join("wal-0-sealed-99.bin").exists());
     assert_eq!(
-        turbolog::Wal::replay(data_dir.join("wal.bin"), 384)
+        turbolog::Wal::replay(data_dir.join("wal-0.bin"), 384)
             .unwrap()
             .len(),
         4

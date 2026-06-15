@@ -76,6 +76,9 @@ impl Wal {
     }
 
     /// Detaches the current WAL as a sealed file (rename) and reopens a fresh active WAL.
+    /// The sealed filename is derived from the active WAL's stem: `{stem}-sealed-{nanos}.bin`.
+    /// For example, `wal-0.bin` becomes `wal-0-sealed-{nanos}.bin` in the same directory.
+    ///
     /// Only metadata operations happen here (flush + rename + create) — safe to call under
     /// the write-path lock without stalling ingestion.
     ///
@@ -88,15 +91,24 @@ impl Wal {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let sealed_path = self.path.with_file_name(format!("wal-sealed-{nanos}.bin"));
+        // Derive sealed name from the WAL stem so shards stay isolated.
+        // wal-0.bin → wal-0-sealed-{nanos}.bin
+        let stem = self
+            .path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("wal");
+        let sealed_name = format!("{stem}-sealed-{nanos}.bin");
+        let sealed_path = self.path.with_file_name(sealed_name);
         std::fs::rename(&self.path, &sealed_path)
             .with_context(|| format!("Failed to detach WAL to {}", sealed_path.display()))?;
         *self = Self::open(&self.path, self.dim)?;
         Ok(sealed_path)
     }
 
-    /// Lists leftover `wal-sealed-*.bin` files in `dir` (crash residue), oldest first.
-    pub fn sealed_leftovers(dir: &Path) -> Result<Vec<PathBuf>> {
+    /// Lists sealed leftover files in `dir` whose names start with `prefix` (crash residue),
+    /// oldest first. Each shard passes its own prefix, e.g. `"wal-0-sealed-"`.
+    pub fn sealed_leftovers(dir: &Path, prefix: &str) -> Result<Vec<PathBuf>> {
         let mut files: Vec<PathBuf> = match std::fs::read_dir(dir) {
             Ok(entries) => entries
                 .filter_map(|e| e.ok())
@@ -104,7 +116,7 @@ impl Wal {
                 .filter(|p| {
                     p.file_name()
                         .and_then(|n| n.to_str())
-                        .is_some_and(|n| n.starts_with("wal-sealed-") && n.ends_with(".bin"))
+                        .is_some_and(|n| n.starts_with(prefix) && n.ends_with(".bin"))
                 })
                 .collect(),
             Err(_) => Vec::new(),
@@ -217,6 +229,31 @@ mod tests {
         }
         let entries = Wal::replay(&path, 4).unwrap();
         assert_eq!(entries.len(), 1, "incomplete trailing records should be ignored");
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn detach_sealed_derives_name_from_stem() {
+        // WAL at turbolog_wal_detach_{pid}.bin → sealed at turbolog_wal_detach_{pid}-sealed-{nanos}.bin
+        let path = temp_path("detach");
+        std::fs::remove_file(&path).ok();
+        {
+            let mut wal = Wal::open(&path, 4).unwrap();
+            wal.append(1, &[0.1; 4]).unwrap();
+            let sealed = wal.detach_sealed().unwrap();
+            // Sealed file exists; active WAL is fresh (0 records).
+            assert!(sealed.exists(), "sealed file must exist");
+            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap();
+            let sealed_name = sealed.file_name().and_then(|n| n.to_str()).unwrap();
+            assert!(
+                sealed_name.starts_with(stem),
+                "sealed name should start with WAL stem"
+            );
+            assert!(sealed_name.contains("-sealed-"));
+            assert!(!path.exists() || Wal::replay(&path, 4).unwrap().is_empty(),
+                "active WAL should be fresh after detach");
+            std::fs::remove_file(&sealed).ok();
+        }
         std::fs::remove_file(&path).ok();
     }
 }
