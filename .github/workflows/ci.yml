@@ -38,6 +38,9 @@ jobs:
       - name: Cargo cache
         uses: Swatinem/rust-cache@v2
 
+      - name: Install system deps
+        run: sudo apt-get update -q && sudo apt-get install -y libopenblas-dev
+
       - name: Restore ONNX model cache
         uses: actions/cache@v4
         with:
@@ -92,6 +95,10 @@ jobs:
           path: models/
           key: ${{ env.MODEL_CACHE_KEY }}
 
+      - name: Install system deps (Ubuntu only)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -q && sudo apt-get install -y libopenblas-dev
+
       - name: Download ONNX models (if not cached)
         run: bash scripts/download_model.sh
 
@@ -117,15 +124,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust 1.70.0 (edition 2021 MSRV)
+      - name: Install Rust 1.74.0 (MSRV — clap 4.x requires 1.74)
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.70.0"
+          toolchain: "1.74.0"
 
       - name: Cargo cache
         uses: Swatinem/rust-cache@v2
         with:
           key: msrv
+
+      - name: Remove Cargo.lock (format v4 unsupported by older Cargo)
+        run: rm -f Cargo.lock
 
       - name: Check compilation
         run: cargo check --all-features
@@ -161,6 +171,9 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           key: coverage
+
+      - name: Install system deps
+        run: sudo apt-get update -q && sudo apt-get install -y libopenblas-dev
 
       - name: Restore ONNX model cache
         uses: actions/cache@v4
@@ -232,6 +245,9 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           key: release
+
+      - name: Install system deps
+        run: sudo apt-get update -q && sudo apt-get install -y libopenblas-dev
 
       - name: Restore ONNX model cache
         uses: actions/cache@v4
