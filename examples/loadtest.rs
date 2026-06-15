@@ -6,6 +6,8 @@
 //! 3. 동시 부하: ingest + 1초 주기 스왑 + 검색 레이턴시 p50/p99
 //! 4. 엣지케이스 프로브: 초장문 로그 라인
 //! 5. HTTP 경로 처리량 (배치 10건 POST /logs)
+//! 6. 미스 폭풍 내성
+//! 7. 멀티스레드 동시 인입 경합 (글로벌 쓰기 락 확장성)
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -241,6 +243,67 @@ fn main() -> anyhow::Result<()> {
             hits as f64 / el.as_secs_f64(),
             storm_count
         );
+    }
+
+    // ── 7) 멀티스레드 동시 인입 경합: 글로벌 쓰기 락 확장성 측정 ──
+    // N개 스레드가 동시에 engine.ingest_log를 호출해 총 처리량과 스레드 수 대비
+    // 선형 확장성을 출력한다. 캐시 적중 경로를 유지해 WAL 락 경합만 노출함.
+    // 1T 대비 확장 배수(scale)가 낮을수록 샤딩 개선의 여지가 크다.
+    {
+        let parallelism = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4);
+
+        println!("\n[7] 멀티스레드 동시 인입 경합 (available_parallelism={parallelism})");
+        println!("    threads | logs/s       | scale vs 1T");
+        println!("    --------|--------------|------------");
+
+        // 1-스레드 기준 측정 (20,000건)
+        let single_tps = {
+            let n = 20_000usize;
+            let t = Instant::now();
+            for i in 0..n {
+                engine.ingest_log(&make_log(i))?;
+            }
+            n as f64 / t.elapsed().as_secs_f64()
+        };
+        println!("    {:7} | {:12.0} | {:.2}x", 1, single_tps, 1.0f64);
+
+        // 2T, 4T, available_parallelism T 측정
+        let thread_counts: Vec<usize> = {
+            let mut v = vec![2usize, 4];
+            if parallelism > 4 {
+                v.push(parallelism);
+            }
+            v.dedup();
+            v
+        };
+
+        for t_count in thread_counts {
+            let n_per_thread = 10_000usize;
+            let barrier = Arc::new(std::sync::Barrier::new(t_count));
+            let threads: Vec<_> = (0..t_count)
+                .map(|w| {
+                    let engine = Arc::clone(&engine);
+                    let barrier = Arc::clone(&barrier);
+                    std::thread::spawn(move || {
+                        barrier.wait(); // 모든 스레드 동시 출발
+                        let t0 = Instant::now();
+                        for i in 0..n_per_thread {
+                            engine.ingest_log(&make_log(w * n_per_thread + i)).unwrap();
+                        }
+                        t0.elapsed()
+                    })
+                })
+                .collect();
+            let durations: Vec<Duration> = threads.into_iter().map(|th| th.join().unwrap()).collect();
+            // 총 처리량 = 전체 logs ÷ 가장 오래 걸린 스레드 벽시계 기준
+            let max_dur = durations.iter().max().unwrap();
+            let total_logs = t_count * n_per_thread;
+            let tps = total_logs as f64 / max_dur.as_secs_f64();
+            let scale = tps / single_tps;
+            println!("    {:7} | {:12.0} | {:.2}x", t_count, tps, scale);
+        }
     }
 
     let s = engine.stats();
