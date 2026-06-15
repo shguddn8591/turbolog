@@ -1,0 +1,60 @@
+---
+# TurboLog HorizontalPodAutoscaler
+#
+# 기준: CPU 사용률 70%
+#   CPU는 임베딩 연산(ONNX 추론)이 지배적이며 직관적으로 스케일 신호가 된다.
+#
+# 커스텀 메트릭 확장 가능성 (주석):
+#   turbolog_inflight_requests (현재 처리 중인 요청 수)를 Prometheus Adapter로
+#   HPA custom metrics API에 노출하면, CPU 대신 또는 병행하여 아래처럼 추가할 수 있다:
+#
+#   metrics:
+#     - type: Pods
+#       pods:
+#         metric:
+#           name: turbolog_inflight_requests
+#         target:
+#           type: AverageValue
+#           averageValue: "800"   # 레플리카당 평균 인-플라이트 임계치
+#
+#   이 방식은 CPU가 낮아도 대기 요청이 많은 경우 선제 스케일아웃에 유리하다.
+#
+# min 6 / max 50:
+#   min=6 : AZ 3개 기준 AZ당 2개 이상 보장 + PDB minAvailable=4 만족
+#   max=50: 100만 req/s 목표 기준 레플리카당 ~2만 req/s 처리량 가정
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: turbolog
+  namespace: turbolog
+  labels:
+    app.kubernetes.io/name: turbolog
+    app.kubernetes.io/component: hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: turbolog
+  minReplicas: 6
+  maxReplicas: 50
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Pods
+          value: 4
+          periodSeconds: 60
+    scaleDown:
+      # 스케일다운은 급격한 축소로 인한 서비스 영향을 방지하기 위해 천천히
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 120

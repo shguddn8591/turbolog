@@ -1,0 +1,27 @@
+# 빌드 컨텍스트에서 제외할 항목
+# target/: 로컬 컴파일 아티팩트 — 수백 MB 이상
+target/
+
+# .git: VCS 메타데이터 불필요
+.git/
+.gitignore
+
+# 모델 파일: 이미지에 굽지 않음 — 볼륨/initContainer로 주입
+models/
+
+# 데이터 디렉터리: 런타임 상태
+data/
+
+# 개발 도구/문서
+.vscode/
+.idea/
+*.md
+docs/
+tasks/
+examples/
+tests/
+scripts/
+
+# OS 메타데이터
+.DS_Store
+Thumbs.db
