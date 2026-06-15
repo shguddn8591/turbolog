@@ -82,12 +82,12 @@ pub fn run_server_with(
                 if shutdown.load(Ordering::Relaxed) {
                     break;
                 }
-                match server.recv_timeout(Duration::from_millis(200)) {
+                match server.try_recv() {
                     Ok(Some(request)) => {
                         handle(&engine, auth_token.as_deref(), max_inflight, &inflight, request);
                     }
                     Ok(None) => {
-                        // timeout — check shutdown flag on next iteration
+                        std::thread::sleep(Duration::from_millis(200));
                     }
                     Err(_) => break,
                 }
