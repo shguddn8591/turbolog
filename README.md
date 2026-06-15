@@ -39,7 +39,7 @@ Built on [turbovec](https://github.com/RyanCodrai/turbovec) (TurboQuant quantize
                         │                                             │
   Log line ──▶ ┌────────┴──────────┐    ┌──────────────┐              │
                │  Drain Parser     │───▶│  LRU Cache   │              │
-               │  (template ID)    │    │  (10K slots)  │              │
+               │  (template ID)    │    │  (10K slots) │              │
                └───────────────────┘    └───┬──────────┘              │
                                             │                         │
                                   hit? ─────┤                         │
@@ -48,24 +48,24 @@ Built on [turbovec](https://github.com/RyanCodrai/turbovec) (TurboQuant quantize
                                   │  ┌──────────────┐                 │
                                   │  │ ONNX Embedder│                 │
                                   │  │ MiniLM-L6-v2 │                 │
-                                  │  │ (384-dim CPU) │                 │
+                                  │  │ (384-dim CPU)│                 │
                                   │  └──────┬───────┘                 │
                                   │         │                         │
                                   ▼         ▼                         │
                               ┌──────────────────┐                    │
-                              │    WAL Append     │                   │
-                              │   (crash-safe)    │                   │
+                              │    WAL Append    │                    │
+                              │   (crash-safe)   │                    │
                               └────────┬─────────┘                    │
                                        │                              │
                               ┌────────▼─────────┐                    │
-                              │  Write Index      │                   │
-                              │  (Mutex-guarded)  │                   │
+                              │  Write Index     │                    │
+                              │  (Mutex-guarded) │                    │
                               └────────┬─────────┘                    │
                                        │ swap (every 10s)             │
                               ┌────────▼─────────┐  ┌──────────────┐  │
-                              │  Read Snapshot    │──│  Ring Buffer  │ │
-                              │  (ArcSwap, lock-  │  │  (30 windows)│ │
-                              │   free reads)     │  └──────────────┘ │
+                              │  Read Snapshot   │──│  Ring Buffer │  │
+                              │  (ArcSwap, lock- │  │  (30 windows)│  │
+                              │   free reads)    │  └──────────────┘  │
                               └────────┬─────────┘                    │
                                        │                              │
                               ┌────────▼─────────┐                    │
@@ -73,7 +73,7 @@ Built on [turbovec](https://github.com/RyanCodrai/turbovec) (TurboQuant quantize
                               │ Tier 1: Centroid  │                   │
                               │ Tier 2: ANN Search│                   │
                               └──────────────────┘                    │
-                        └─────────────────────────────────────────────┘
+                                       └──────────────────────────────┘
 ```
 
 ## 📊 Data Flow
