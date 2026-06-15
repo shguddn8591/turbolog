@@ -55,7 +55,7 @@ impl AnomalyDetector {
     pub fn fit(normal_vectors: &[f32], dim: usize, k: usize, anomaly_threshold: f32) -> Self {
         assert!(dim > 0 && !normal_vectors.is_empty());
         assert!(
-            normal_vectors.len() % dim == 0,
+            normal_vectors.len().is_multiple_of(dim),
             "Input vectors must form a flat n×dim array"
         );
         let n = normal_vectors.len() / dim;
