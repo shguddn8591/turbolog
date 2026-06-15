@@ -18,6 +18,9 @@ pub mod scan;
 pub mod wal;
 pub mod watch;
 
+#[cfg(feature = "tui")]
+pub mod tui;
+
 pub use detect::{AnomalyDetector, DetectionResult};
 pub use engine::{EngineConfig, TurboLogEngine};
 pub use index::PingPongIndexer;
