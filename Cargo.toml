@@ -4,7 +4,7 @@ version = "0.2.0"
 edition = "2021"
 description = "Ultralight time-series log vector engine — real-time indexing & anomaly detection"
 license = "MIT"
-rust-version = "1.74"
+rust-version = "1.85"
 
 [features]
 default = []
