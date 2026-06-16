@@ -12,7 +12,7 @@ const RESET: &str = "\x1b[0m";
 const YELLOW: &str = "\x1b[33m";
 
 pub fn run_watch(pipeline: &mut LocalPipeline) -> Result<()> {
-    let use_color = std::env::var("NO_COLOR").is_err() && std::io::stderr().is_terminal();
+    let use_color = std::env::var() && std::io::stderr().is_terminal();
     let stdin = std::io::stdin();
     let reader = BufReader::new(stdin.lock());
 
