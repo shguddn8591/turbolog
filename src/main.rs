@@ -91,15 +91,15 @@ fn run_serve() -> anyhow::Result<()> {
 fn run_watch_cmd(threshold: Option<f32>) -> anyhow::Result<()> {
     let model_dir = PathBuf::from(env_or("TURBOLOG_MODEL_DIR", "./models"));
     let embedder = make_embedder(&model_dir)?;
-    let mut pipeline = LocalPipeline::new(embedder);
+    let mut pipeline = LocalPipeline::new(embedder, threshold);
     eprintln!("[turbolog] streaming anomaly detection active (calibrating on first 64 templates)");
-    turbolog::watch::run_watch(&mut pipeline, threshold)
+    turbolog::watch::run_watch(&mut pipeline)
 }
 
 fn run_scan_cmd(format: &str) -> anyhow::Result<()> {
     let model_dir = PathBuf::from(env_or("TURBOLOG_MODEL_DIR", "./models"));
     let embedder = make_embedder(&model_dir)?;
-    let mut pipeline = LocalPipeline::new(embedder);
+    let mut pipeline = LocalPipeline::new(embedder, None);
     turbolog::scan::run_scan(&mut pipeline, format)
 }
 

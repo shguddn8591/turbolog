@@ -11,9 +11,8 @@ const DIM: &str = "\x1b[2m";
 const RESET: &str = "\x1b[0m";
 const YELLOW: &str = "\x1b[33m";
 
-pub fn run_watch(pipeline: &mut LocalPipeline, threshold_override: Option<f32>) -> Result<()> {
-    let _ = threshold_override; // reserved: pipeline uses auto-calibrated threshold
-    let use_color = std::env::var("NO_COLOR").is_err() && std::io::stderr().is_terminal();
+pub fn run_watch(pipeline: &mut LocalPipeline) -> Result<()> {
+    let use_color = std::env::var() && std::io::stderr().is_terminal();
     let stdin = std::io::stdin();
     let reader = BufReader::new(stdin.lock());
 
@@ -53,7 +52,7 @@ fn print_result(line: &str, result: &LineResult, color: bool) {
         // Normal — print line as-is; anomalies stand out by contrast.
         if color && result.score.map(|s| s > 0.0).unwrap_or(false) {
             // Slightly dim normal lines only when a score exists, so anomalies pop.
-            println!("{line}");
+            println!("{DIM}{line}{RESET}");
         } else {
             println!("{line}");
         }
