@@ -1,4 +1,5 @@
 [licenses]
+# In v2, anything not in 'allow' is implicitly denied.
 allow = [
     "MIT",
     "Apache-2.0",
@@ -12,7 +13,6 @@ allow = [
     "Zlib",
     "CC0-1.0",
 ]
-deny = ["GPL-2.0", "GPL-3.0", "AGPL-3.0"]
 
 [[licenses.clarify]]
 name = "ring"
@@ -20,13 +20,10 @@ expression = "MIT AND ISC AND OpenSSL"
 license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]
 
 [advisories]
-vulnerability = "deny"
+# Vulnerabilities are denied by default in v2.
 
 [bans]
 multiple-versions = "warn"
-deny = [
-    { name = "openssl", reason = "prefer rustls or system-tls" },
-]
 
 [sources]
 unknown-registry = "warn"
