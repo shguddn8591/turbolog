@@ -12,6 +12,7 @@ allow = [
     "OpenSSL",
     "Zlib",
     "CC0-1.0",
+    "CDLA-Permissive-2.0",
 ]
 
 [[licenses.clarify]]
@@ -20,7 +21,13 @@ expression = "MIT AND ISC AND OpenSSL"
 license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]
 
 [advisories]
-# Vulnerabilities are denied by default in v2.
+# Ignore advisories in transitive deps we cannot directly fix.
+ignore = [
+    # RUSTSEC-2026-0002: IterMut unsound (transitive dep, not directly fixable)
+    "RUSTSEC-2026-0002",
+    # RUSTSEC-2024-0436: paste unmaintained (pulled in by tokenizers/ort)
+    "RUSTSEC-2024-0436",
+]
 
 [bans]
 multiple-versions = "warn"
