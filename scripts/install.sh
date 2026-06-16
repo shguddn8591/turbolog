@@ -61,12 +61,17 @@ main() {
     tar -xzf "$TMP/$ARCHIVE" -C "$TMP"
 
     echo "Installing to ${INSTALL_DIR}/${BINARY}…"
+    chmod +x "$TMP/$BINARY"
     if [ -w "$INSTALL_DIR" ]; then
+        mkdir -p "$INSTALL_DIR"
+        mv "$TMP/$BINARY" "${INSTALL_DIR}/${BINARY}"
+    elif [ ! -d "$INSTALL_DIR" ] && [ -w "$(dirname "$INSTALL_DIR")" ]; then
+        mkdir -p "$INSTALL_DIR"
         mv "$TMP/$BINARY" "${INSTALL_DIR}/${BINARY}"
     else
+        sudo mkdir -p "$INSTALL_DIR"
         sudo mv "$TMP/$BINARY" "${INSTALL_DIR}/${BINARY}"
     fi
-    chmod +x "${INSTALL_DIR}/${BINARY}"
 
     echo ""
     echo "✅  TurboLog ${VERSION} installed to ${INSTALL_DIR}/${BINARY}"
