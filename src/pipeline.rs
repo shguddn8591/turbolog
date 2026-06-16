@@ -74,7 +74,9 @@ impl LocalPipeline {
 
         let detector = self.detector.as_ref().unwrap();
         let score = detector.min_distance(&vector);
-        let threshold = self.threshold_override.unwrap_or_else(|| detector.threshold());
+        let threshold = self
+            .threshold_override
+            .unwrap_or_else(|| detector.threshold());
         let is_anomaly = score > threshold;
 
         Ok(LineResult {
