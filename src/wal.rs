@@ -228,7 +228,11 @@ mod tests {
             f.write_all(&[0u8; 5]).unwrap();
         }
         let entries = Wal::replay(&path, 4).unwrap();
-        assert_eq!(entries.len(), 1, "incomplete trailing records should be ignored");
+        assert_eq!(
+            entries.len(),
+            1,
+            "incomplete trailing records should be ignored"
+        );
         std::fs::remove_file(&path).ok();
     }
 
@@ -250,8 +254,10 @@ mod tests {
                 "sealed name should start with WAL stem"
             );
             assert!(sealed_name.contains("-sealed-"));
-            assert!(!path.exists() || Wal::replay(&path, 4).unwrap().is_empty(),
-                "active WAL should be fresh after detach");
+            assert!(
+                !path.exists() || Wal::replay(&path, 4).unwrap().is_empty(),
+                "active WAL should be fresh after detach"
+            );
             std::fs::remove_file(&sealed).ok();
         }
         std::fs::remove_file(&path).ok();

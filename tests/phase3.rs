@@ -45,7 +45,8 @@ fn wal_crash_recovery() {
     // 1) 인입 후 스왑 없이 종료 (크래시 시뮬레이션 — WAL에만 존재)
     {
         let engine =
-            TurboLogEngine::open(test_config(data_dir.clone()), vec![make_embedder(&models)]).unwrap();
+            TurboLogEngine::open(test_config(data_dir.clone()), vec![make_embedder(&models)])
+                .unwrap();
         for i in 0..7 {
             engine
                 .ingest_log(&format!("payment failed for order {i} with code 502"))

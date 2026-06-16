@@ -1,9 +1,15 @@
 [package]
 name = "turbolog"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Ultralight time-series log vector engine — real-time indexing & anomaly detection"
 license = "MIT"
+rust-version = "1.88"
+
+[features]
+default = []
+embedded-model = []
+tui = ["dep:ratatui", "dep:crossterm"]
 
 [dependencies]
 turbovec = "0.8"
@@ -17,9 +23,14 @@ tiny_http = "0.12"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 signal-hook = "0.3"
+clap = { version = "4", features = ["derive"] }
+ureq = { version = "2", features = ["json"] }
+
+# Optional TUI dependencies
+ratatui = { version = "0.29", optional = true }
+crossterm = { version = "0.28", optional = true }
 
 [dev-dependencies]
-ureq = { version = "2", features = ["json"] }
 criterion = { version = "0.5", features = ["html_reports"] }
 
 [[bench]]

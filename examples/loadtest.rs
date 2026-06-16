@@ -21,7 +21,12 @@ const TEMPLATES: usize = 10;
 
 fn make_log(i: usize) -> String {
     match i % TEMPLATES {
-        0 => format!("connection accepted from 10.0.{}.{} port {}", i % 256, (i * 7) % 256, 5000 + i % 1000),
+        0 => format!(
+            "connection accepted from 10.0.{}.{} port {}",
+            i % 256,
+            (i * 7) % 256,
+            5000 + i % 1000
+        ),
         1 => format!("user u{} login success from web console", i),
         2 => format!("disk usage at {} percent on /var", i % 100),
         3 => format!("request to /api/v1/items took {} ms", i % 900),
@@ -30,7 +35,11 @@ fn make_log(i: usize) -> String {
         6 => format!("gc pause of {} ms in region old-gen", i % 300),
         7 => format!("tcp retransmit count {} on eth0", i % 99),
         8 => format!("query plan hash {} executed in {} ms", i * 31, i % 50),
-        _ => format!("session {} renewed token expiring in {} s", i, 3600 - i % 600),
+        _ => format!(
+            "session {} renewed token expiring in {} s",
+            i,
+            3600 - i % 600
+        ),
     }
 }
 
@@ -44,7 +53,10 @@ fn percentile(sorted: &[Duration], p: f64) -> Duration {
 
 fn main() -> anyhow::Result<()> {
     let models = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("models");
-    anyhow::ensure!(models.join("model.onnx").exists(), "먼저 ./scripts/download_model.sh 실행");
+    anyhow::ensure!(
+        models.join("model.onnx").exists(),
+        "먼저 ./scripts/download_model.sh 실행"
+    );
     let data_dir = std::env::temp_dir().join(format!("turbolog_loadtest_{}", std::process::id()));
     std::fs::remove_dir_all(&data_dir).ok();
 
@@ -129,7 +141,9 @@ fn main() -> anyhow::Result<()> {
                 let mut lat = Vec::new();
                 while !stop.load(Ordering::Relaxed) {
                     let t0 = Instant::now();
-                    let _ = engine.search_text("disk space almost full warning", 5).unwrap();
+                    let _ = engine
+                        .search_text("disk space almost full warning", 5)
+                        .unwrap();
                     lat.push(t0.elapsed());
                     std::thread::sleep(Duration::from_millis(10));
                 }
@@ -161,7 +175,11 @@ fn main() -> anyhow::Result<()> {
     {
         let long_line = "ERROR stack overflow ".repeat(2000); // ~42,000자
         match engine.ingest_log(&long_line) {
-            Ok(r) => println!("[4] 초장문(42k자) 로그: OK (id={}, anomaly={})", r.id, r.anomaly.is_some()),
+            Ok(r) => println!(
+                "[4] 초장문(42k자) 로그: OK (id={}, anomaly={})",
+                r.id,
+                r.anomaly.is_some()
+            ),
             Err(e) => println!("[4] 초장문(42k자) 로그: ERROR — {e:#}"),
         }
         match engine.ingest_log("") {
@@ -182,8 +200,9 @@ fn main() -> anyhow::Result<()> {
                 let url = url.clone();
                 std::thread::spawn(move || {
                     for r in 0..reqs_per_thread {
-                        let logs: Vec<String> =
-                            (0..batch).map(|j| make_log(w * 1000 + r * batch + j)).collect();
+                        let logs: Vec<String> = (0..batch)
+                            .map(|j| make_log(w * 1000 + r * batch + j))
+                            .collect();
                         let resp = ureq::post(&url)
                             .send_json(serde_json::json!({ "logs": logs }))
                             .unwrap();
@@ -218,8 +237,9 @@ fn main() -> anyhow::Result<()> {
                     if stop.load(Ordering::Relaxed) {
                         break;
                     }
-                    let words: Vec<String> =
-                        (0..(3 + i % 120)).map(|j| format!("storm{i}tok{j}")).collect();
+                    let words: Vec<String> = (0..(3 + i % 120))
+                        .map(|j| format!("storm{i}tok{j}"))
+                        .collect();
                     engine.ingest_log(&words.join(" ")).unwrap();
                     embedded += 1;
                 }
@@ -296,7 +316,8 @@ fn main() -> anyhow::Result<()> {
                     })
                 })
                 .collect();
-            let durations: Vec<Duration> = threads.into_iter().map(|th| th.join().unwrap()).collect();
+            let durations: Vec<Duration> =
+                threads.into_iter().map(|th| th.join().unwrap()).collect();
             // 총 처리량 = 전체 logs ÷ 가장 오래 걸린 스레드 벽시계 기준
             let max_dur = durations.iter().max().unwrap();
             let total_logs = t_count * n_per_thread;
