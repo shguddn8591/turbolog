@@ -2,9 +2,9 @@ name: TurboLog CI
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "feat/**" ]
   pull_request:
-    branches: [ "main" ]
+    branches: [ "main", "feat/**" ]
   schedule:
     # Every Sunday 00:00 UTC — early detection of dependency breakage
     - cron: '0 0 * * 0'
