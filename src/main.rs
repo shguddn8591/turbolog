@@ -104,6 +104,13 @@ fn run_scan_cmd(format: &str) -> anyhow::Result<()> {
 }
 
 fn run_ui_cmd(server: &str, standalone: bool) -> anyhow::Result<()> {
-    let _ = (server, standalone);
-    anyhow::bail!("TUI dashboard is not compiled in. Rebuild with:\n  cargo build --features dashboard")
+    #[cfg(feature = "tui")]
+    {
+        turbolog::tui::run_ui(server, standalone)
+    }
+    #[cfg(not(feature = "tui"))]
+    {
+        let _ = (server, standalone);
+        anyhow::bail!("TUI support is not compiled in. Rebuild with:\n  cargo build --features tui")
+    }
 }
