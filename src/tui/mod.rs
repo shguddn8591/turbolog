@@ -17,6 +17,15 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 use crate::tui::app::{AppState, DashEvent, DashMode, LogEntry};
 use crate::tui::events::KeyEvent;
 
+struct TerminalGuard;
+
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        let _ = disable_raw_mode();
+        let _ = execute!(io::stdout(), LeaveAlternateScreen);
+    }
+}
+
 /// Entry point for the `turbolog ui` subcommand.
 pub fn run_ui(server_url: &str, standalone: bool) -> Result<()> {
     let mode = if standalone {
@@ -33,7 +42,7 @@ pub fn run_ui(server_url: &str, standalone: bool) -> Result<()> {
             std::env::var("TURBOLOG_MODEL_DIR").unwrap_or_else(|_| "./models".into()),
         );
         let embedder = crate::embedded::make_embedder(&model_dir)?;
-        Some(crate::pipeline::LocalPipeline::new(embedder))
+        Some(crate::pipeline::LocalPipeline::new(embedder, None))
     } else {
         None
     };
@@ -42,6 +51,8 @@ pub fn run_ui(server_url: &str, standalone: bool) -> Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
+    let _guard = TerminalGuard;
+
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -70,10 +81,7 @@ pub fn run_ui(server_url: &str, standalone: bool) -> Result<()> {
         &mut last_sparkline_tick,
     );
 
-    // Restore terminal regardless of result.
-    disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-    terminal.show_cursor()?;
+    if let Ok(_) = terminal.show_cursor() {}
 
     result
 }

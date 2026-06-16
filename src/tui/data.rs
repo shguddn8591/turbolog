@@ -23,6 +23,7 @@ pub fn http_poll_loop(server_url: String, tx: Sender<DashEvent>) {
 
     loop {
         let stats: Option<StatsResponse> = ureq::get(&stats_url)
+            .timeout(Duration::from_secs(2))
             .call()
             .ok()
             .and_then(|r| r.into_json().ok());
@@ -39,17 +40,21 @@ pub fn http_poll_loop(server_url: String, tx: Sender<DashEvent>) {
                 prev_ingested = stats.ingested_total;
                 prev_anomalies = stats.anomalies_total;
 
-                let _ = tx.send(DashEvent::StatsUpdate {
+                if tx.send(DashEvent::StatsUpdate {
                     ingested_total: stats.ingested_total,
                     cache_hit_rate: stats.cache_hit_rate,
                     anomaly_rate,
                     detector_calibrated: stats.detector_calibrated,
-                });
+                }).is_err() {
+                    break;
+                }
             }
             None => {
-                let _ = tx.send(DashEvent::ConnError(format!(
+                if tx.send(DashEvent::ConnError(format!(
                     "Cannot reach {server_url}/stats — is the server running?"
-                )));
+                ))).is_err() {
+                    break;
+                }
             }
         }
         std::thread::sleep(Duration::from_millis(500));
@@ -84,17 +89,21 @@ pub fn standalone_loop(mut pipeline: LocalPipeline, tx: Sender<DashEvent>) {
             } else {
                 0.0
             };
-            let _ = tx.send(DashEvent::LogLine(LogEntry {
+            if tx.send(DashEvent::LogLine(LogEntry {
                 text: line,
                 is_anomaly: result.is_anomaly,
                 score: result.score,
-            }));
-            let _ = tx.send(DashEvent::StatsUpdate {
+            })).is_err() {
+                break;
+            }
+            if tx.send(DashEvent::StatsUpdate {
                 ingested_total: total,
                 cache_hit_rate: 0.0, // VectorCache hit_rate not exposed via LocalPipeline
                 anomaly_rate,
                 detector_calibrated: pipeline.calibrated(),
-            });
+            }).is_err() {
+                break;
+            }
         }
     }
 }
