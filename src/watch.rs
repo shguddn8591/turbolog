@@ -11,8 +11,7 @@ const DIM: &str = "\x1b[2m";
 const RESET: &str = "\x1b[0m";
 const YELLOW: &str = "\x1b[33m";
 
-pub fn run_watch(pipeline: &mut LocalPipeline, threshold_override: Option<f32>) -> Result<()> {
-    let _ = threshold_override; // reserved: pipeline uses auto-calibrated threshold
+pub fn run_watch(pipeline: &mut LocalPipeline) -> Result<()> {
     let use_color = std::env::var("NO_COLOR").is_err() && std::io::stderr().is_terminal();
     let stdin = std::io::stdin();
     let reader = BufReader::new(stdin.lock());

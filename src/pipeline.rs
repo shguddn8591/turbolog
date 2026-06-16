@@ -30,15 +30,18 @@ pub struct LocalPipeline {
     calibration_buf: Vec<f32>,
     /// Number of distinct templates seen so far (caps at CALIBRATION_TEMPLATES).
     calibration_count: usize,
+    /// User-supplied threshold override from `--threshold`; `None` uses auto-calibrated value.
+    threshold_override: Option<f32>,
 }
 
 impl LocalPipeline {
-    pub fn new(embedder: Embedder) -> Self {
+    pub fn new(embedder: Embedder, threshold_override: Option<f32>) -> Self {
         Self {
             cache: VectorCache::new(embedder),
             detector: None,
             calibration_buf: Vec::new(),
             calibration_count: 0,
+            threshold_override,
         }
     }
 
@@ -71,7 +74,8 @@ impl LocalPipeline {
 
         let detector = self.detector.as_ref().unwrap();
         let score = detector.min_distance(&vector);
-        let is_anomaly = score > detector.threshold();
+        let threshold = self.threshold_override.unwrap_or_else(|| detector.threshold());
+        let is_anomaly = score > threshold;
 
         Ok(LineResult {
             template: parsed.template,

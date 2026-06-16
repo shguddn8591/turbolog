@@ -126,8 +126,8 @@ fn print_text_report(
         for entry in top {
             let score = entry.result.score.unwrap_or(0.0);
             // Truncate long lines for readability.
-            let display = if entry.line.len() > 120 {
-                format!("{}…", &entry.line[..119])
+            let display = if entry.line.chars().count() > 120 {
+                format!("{}…", entry.line.chars().take(119).collect::<String>())
             } else {
                 entry.line.clone()
             };
