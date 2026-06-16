@@ -23,7 +23,8 @@ pub fn http_poll_loop(server_url: String, tx: Sender<DashEvent>) {
 
     loop {
         let stats: Option<StatsResponse> = ureq::get(&stats_url)
-            .timeout(Duration::from_secs(2))
+        let stats: Option<StatsResponse> = ureq::get(&stats_url)
+            .timeout(Duration::from_secs(1))
             .call()
             .ok()
             .and_then(|r| r.into_json().ok());
