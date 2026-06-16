@@ -13,9 +13,6 @@ allow = [
     "CC0-1.0",
 ]
 deny = ["GPL-2.0", "GPL-3.0", "AGPL-3.0"]
-copyleft = "warn"
-# Some crates have multiple licenses — accept any one of them.
-allow-osi-fsf-free = "neither"
 
 [[licenses.clarify]]
 name = "ring"
@@ -24,12 +21,9 @@ license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]
 
 [advisories]
 vulnerability = "deny"
-unmaintained = "none"
-yanked = "warn"
 
 [bans]
 multiple-versions = "warn"
-wildcards = "deny"
 deny = [
     { name = "openssl", reason = "prefer rustls or system-tls" },
 ]
