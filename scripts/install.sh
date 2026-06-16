@@ -40,8 +40,8 @@ main() {
     echo "Platform: $TARGET"
 
     echo "Fetching latest release version…"
-    VERSION=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
-        | grep '"tag_name"' | sed 's/.*"tag_name": *"\(.*\)".*/\1/')
+    VERSION=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \\
+        | grep '"tag_name"' | sed 's/.*"tag_name": *"\\(.*\\)".*/\\1/' || true)
 
     if [ -z "$VERSION" ]; then
         echo "Failed to fetch latest version" >&2
