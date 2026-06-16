@@ -30,9 +30,8 @@ pub struct LocalPipeline {
     calibration_buf: Vec<f32>,
     /// Number of distinct templates seen so far (caps at CALIBRATION_TEMPLATES).
     calibration_count: usize,
-    /// User-supplied threshold override from `--threshold`; `None` uses auto-calibrated value.
     threshold_override: Option<f32>,
-    seen_templates: std::collections::HashSet<String>,
+    seen_templates: std::collections::HashSet<u64>,
 }
 
 impl LocalPipeline {
