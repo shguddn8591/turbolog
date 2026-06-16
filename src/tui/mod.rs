@@ -26,6 +26,18 @@ pub fn run_ui(server_url: &str, standalone: bool) -> Result<()> {
     };
     let mut app = AppState::new(mode, server_url.to_string());
 
+    // Initialize pipeline before terminal setup so a model-load failure doesn't
+    // leave the terminal stuck in raw mode / alternate screen.
+    let standalone_pipeline = if standalone {
+        let model_dir = std::path::PathBuf::from(
+            std::env::var("TURBOLOG_MODEL_DIR").unwrap_or_else(|_| "./models".into()),
+        );
+        let embedder = crate::embedded::make_embedder(&model_dir)?;
+        Some(crate::pipeline::LocalPipeline::new(embedder))
+    } else {
+        None
+    };
+
     // Set up terminal.
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -36,12 +48,7 @@ pub fn run_ui(server_url: &str, standalone: bool) -> Result<()> {
     // Data thread.
     let (data_tx, data_rx) = mpsc::channel::<DashEvent>();
     let url = server_url.to_string();
-    if standalone {
-        let model_dir = std::path::PathBuf::from(
-            std::env::var("TURBOLOG_MODEL_DIR").unwrap_or_else(|_| "./models".into()),
-        );
-        let embedder = crate::embedded::make_embedder(&model_dir)?;
-        let pipeline = crate::pipeline::LocalPipeline::new(embedder);
+    if let Some(pipeline) = standalone_pipeline {
         std::thread::spawn(move || data::standalone_loop(pipeline, data_tx));
     } else {
         std::thread::spawn(move || data::http_poll_loop(url, data_tx));

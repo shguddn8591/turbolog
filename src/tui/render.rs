@@ -45,8 +45,11 @@ fn draw_log_stream(f: &mut Frame, app: &AppState, area: ratatui::layout::Rect) {
             };
             let text = format!("{}{}", prefix, entry.text);
             // Truncate to terminal width to avoid wrapping.
-            let display = if text.len() > area.width as usize {
-                format!("{}…", &text[..area.width.saturating_sub(1) as usize])
+            let display = if text.chars().count() > area.width as usize {
+                let limit = area.width.saturating_sub(1) as usize;
+                let mut truncated: String = text.chars().take(limit).collect();
+                truncated.push('…');
+                truncated
             } else {
                 text
             };
