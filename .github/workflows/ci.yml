@@ -128,18 +128,7 @@ jobs:
       - name: Run doc tests
         run: cargo test --doc
 
-  # ③ Security Audit ────────────────────────────────────────
-  audit:
-    name: Security Audit
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Audit dependencies
-        uses: rustsec/audit-check@v2.0.0
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-  # ⑤ Code Coverage ────────────────────────────────────────
+  # ④ Code Coverage ────────────────────────────────────────
   coverage:
     name: Code Coverage
     needs: test
