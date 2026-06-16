@@ -32,6 +32,7 @@ pub struct LocalPipeline {
     calibration_count: usize,
     /// User-supplied threshold override from `--threshold`; `None` uses auto-calibrated value.
     threshold_override: Option<f32>,
+    seen_templates: std::collections::HashSet<String>,
 }
 
 impl LocalPipeline {
@@ -42,6 +43,7 @@ impl LocalPipeline {
             calibration_buf: Vec::new(),
             calibration_count: 0,
             threshold_override,
+            seen_templates: std::collections::HashSet::new(),
         }
     }
 
@@ -52,9 +54,11 @@ impl LocalPipeline {
 
         // Calibration phase: accumulate novel template vectors.
         if self.detector.is_none() {
-            if self.calibration_count < CALIBRATION_TEMPLATES {
-                self.calibration_buf.extend_from_slice(&vector);
-                self.calibration_count += 1;
+            if self.seen_templates.insert(parsed.template.clone()) {
+                if self.calibration_count < CALIBRATION_TEMPLATES {
+                    self.calibration_buf.extend_from_slice(&vector);
+                    self.calibration_count += 1;
+                }
             }
             if self.calibration_count >= CALIBRATION_TEMPLATES {
                 let k = CENTROID_K.min(self.calibration_count);

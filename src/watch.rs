@@ -52,7 +52,7 @@ fn print_result(line: &str, result: &LineResult, color: bool) {
         // Normal — print line as-is; anomalies stand out by contrast.
         if color && result.score.map(|s| s > 0.0).unwrap_or(false) {
             // Slightly dim normal lines only when a score exists, so anomalies pop.
-            println!("{line}");
+            println!("{DIM}{line}{RESET}");
         } else {
             println!("{line}");
         }
