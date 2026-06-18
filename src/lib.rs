@@ -8,6 +8,7 @@ pub mod chunks;
 pub mod cli;
 pub mod detect;
 pub mod embedded;
+pub mod llm;
 pub mod engine;
 pub mod http;
 pub mod index;

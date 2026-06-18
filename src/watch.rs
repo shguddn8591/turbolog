@@ -4,15 +4,16 @@ use std::io::{BufRead, BufReader, IsTerminal};
 
 use anyhow::Result;
 
+use crate::llm::LlmClient;
 use crate::pipeline::{LineResult, LocalPipeline};
 
 const RED: &str = "\x1b[31m";
 const DIM: &str = "\x1b[2m";
 const RESET: &str = "\x1b[0m";
 const YELLOW: &str = "\x1b[33m";
+const CYAN: &str = "\x1b[36m";
 
-pub fn run_watch(pipeline: &mut LocalPipeline, threshold_override: Option<f32>) -> Result<()> {
-    let _ = threshold_override; // reserved: pipeline uses auto-calibrated threshold
+pub fn run_watch(pipeline: &mut LocalPipeline, llm: Option<&LlmClient>) -> Result<()> {
     let use_color = std::env::var("NO_COLOR").is_err() && std::io::stderr().is_terminal();
     let stdin = std::io::stdin();
     let reader = BufReader::new(stdin.lock());
@@ -25,7 +26,7 @@ pub fn run_watch(pipeline: &mut LocalPipeline, threshold_override: Option<f32>) 
         }
 
         match pipeline.process(&line) {
-            Ok(result) => print_result(&line, &result, use_color),
+            Ok(result) => print_result(&line, &result, use_color, llm),
             Err(e) => eprintln!("turbolog: embedding error: {e}"),
         }
     }
@@ -33,7 +34,7 @@ pub fn run_watch(pipeline: &mut LocalPipeline, threshold_override: Option<f32>) 
     Ok(())
 }
 
-fn print_result(line: &str, result: &LineResult, color: bool) {
+fn print_result(line: &str, result: &LineResult, color: bool, llm: Option<&LlmClient>) {
     if result.is_anomaly {
         if let Some(score) = result.score {
             if color {
@@ -41,22 +42,31 @@ fn print_result(line: &str, result: &LineResult, color: bool) {
             } else {
                 println!("[ANOMALY {score:.2}] {line}");
             }
+            if let Some(client) = llm {
+                match client.explain(line, score) {
+                    Some(explanation) => {
+                        if color {
+                            println!("  {CYAN}└─ {explanation}{RESET}");
+                        } else {
+                            println!("  └─ {explanation}");
+                        }
+                    }
+                    None => {
+                        if color {
+                            println!("  {DIM}└─ (LLM explanation unavailable){RESET}");
+                        }
+                    }
+                }
+            }
         }
     } else if result.score.is_none() {
-        // Still calibrating — print with dim marker so users know we're warming up.
         if color {
             println!("{DIM}[calibrating]{RESET} {line}");
         } else {
             println!("[calibrating] {line}");
         }
     } else {
-        // Normal — print line as-is; anomalies stand out by contrast.
-        if color && result.score.map(|s| s > 0.0).unwrap_or(false) {
-            // Slightly dim normal lines only when a score exists, so anomalies pop.
-            println!("{line}");
-        } else {
-            println!("{line}");
-        }
+        println!("{line}");
     }
 }
 

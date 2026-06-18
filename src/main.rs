@@ -27,7 +27,12 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command.unwrap_or(Command::Serve) {
         Command::Serve => run_serve(),
-        Command::Watch { threshold } => run_watch_cmd(threshold),
+        Command::Watch {
+            threshold,
+            explain,
+            llm_url,
+            llm_model,
+        } => run_watch_cmd(threshold, explain, llm_url.as_deref(), llm_model.as_deref()),
         Command::Scan { format } => run_scan_cmd(&format),
         Command::Ui { server, standalone } => run_ui_cmd(&server, standalone),
     }
@@ -88,12 +93,37 @@ fn run_serve() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn run_watch_cmd(threshold: Option<f32>) -> anyhow::Result<()> {
+fn run_watch_cmd(
+    _threshold: Option<f32>,
+    explain: bool,
+    llm_url: Option<&str>,
+    llm_model: Option<&str>,
+) -> anyhow::Result<()> {
     let model_dir = PathBuf::from(env_or("TURBOLOG_MODEL_DIR", "./models"));
     let embedder = make_embedder(&model_dir)?;
     let mut pipeline = LocalPipeline::new(embedder);
+
+    let llm = if explain {
+        let client = turbolog::llm::LlmClient::detect(llm_url, llm_model);
+        match &client {
+            Some(c) => eprintln!(
+                "[turbolog] LLM connected: {} (model: {})",
+                c.base_url(),
+                c.model()
+            ),
+            None => {
+                eprintln!("[turbolog] --explain: no local LLM found");
+                eprintln!("  Ollama  → https://ollama.ai  (runs on :11434)");
+                eprintln!("  LM Studio → https://lmstudio.ai  (runs on :1234)");
+            }
+        }
+        client
+    } else {
+        None
+    };
+
     eprintln!("[turbolog] streaming anomaly detection active (calibrating on first 64 templates)");
-    turbolog::watch::run_watch(&mut pipeline, threshold)
+    turbolog::watch::run_watch(&mut pipeline, llm.as_ref())
 }
 
 fn run_scan_cmd(format: &str) -> anyhow::Result<()> {
