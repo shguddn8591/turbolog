@@ -11,6 +11,7 @@ use std::thread::JoinHandle;
 use anyhow::{anyhow, Result};
 use serde::Deserialize;
 use serde_json::json;
+use subtle::ConstantTimeEq;
 use tiny_http::{Header, Method, Request, Response, Server};
 
 use crate::engine::TurboLogEngine;
@@ -70,10 +71,12 @@ pub fn run_server(
 
 fn authorized(request: &Request, token: &str) -> bool {
     let expected = format!("Bearer {token}");
-    request
-        .headers()
-        .iter()
-        .any(|h| h.field.equiv("Authorization") && h.value.as_str() == expected)
+    request.headers().iter().any(|h| {
+        h.field.equiv("Authorization")
+            && bool::from(
+                h.value.as_str().as_bytes().ct_eq(expected.as_bytes()),
+            )
+    })
 }
 
 fn handle(engine: &TurboLogEngine, auth_token: Option<&str>, mut request: Request) {

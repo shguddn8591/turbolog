@@ -31,6 +31,7 @@ signal-hook = "0.3"
 clap = { version = "4", features = ["derive"] }
 ureq = { version = "2", features = ["json"] }
 rusqlite = { version = "0.31", features = ["bundled"] }
+subtle = "2"
 
 # Optional TUI dependencies
 ratatui = { version = "0.29", optional = true }

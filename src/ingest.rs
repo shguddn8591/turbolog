@@ -89,8 +89,10 @@ impl Embedder {
         let session = Session::builder()?
             .commit_from_file(model_path.as_ref())
             .context("Failed to load ONNX model")?;
-        let tokenizer = Tokenizer::from_file(tokenizer_path.as_ref())
-            .map_err(|e| anyhow!("Failed to load tokenizer: {e}"))?;
+        let tokenizer = Self::build_tokenizer(
+            Tokenizer::from_file(tokenizer_path.as_ref())
+                .map_err(|e| anyhow!("Failed to load tokenizer: {e}"))?,
+        )?;
         Ok(Self { session, tokenizer })
     }
 
@@ -99,9 +101,22 @@ impl Embedder {
         let session = Session::builder()?
             .commit_from_memory(model_bytes)
             .context("Failed to load ONNX model from bytes")?;
-        let tokenizer = Tokenizer::from_bytes(tokenizer_bytes)
-            .map_err(|e| anyhow!("Failed to load tokenizer from bytes: {e}"))?;
+        let tokenizer = Self::build_tokenizer(
+            Tokenizer::from_bytes(tokenizer_bytes)
+                .map_err(|e| anyhow!("Failed to load tokenizer from bytes: {e}"))?,
+        )?;
         Ok(Self { session, tokenizer })
+    }
+
+    fn build_tokenizer(mut t: Tokenizer) -> Result<Tokenizer> {
+        t.with_truncation(Some(tokenizers::TruncationParams {
+            max_length: 512,
+            strategy: tokenizers::TruncationStrategy::LongestFirst,
+            stride: 0,
+            direction: tokenizers::TruncationDirection::Right,
+        }))
+        .map_err(|e| anyhow!("Failed to configure tokenizer truncation: {e}"))?;
+        Ok(t)
     }
 
     pub fn embed(&mut self, text: &str) -> Result<Vec<f32>> {

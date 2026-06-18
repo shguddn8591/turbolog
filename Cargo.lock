@@ -2960,6 +2960,7 @@ dependencies = [
  "serde",
  "serde_json",
  "signal-hook",
+ "subtle",
  "tiny_http",
  "tokenizers",
  "turbovec",
