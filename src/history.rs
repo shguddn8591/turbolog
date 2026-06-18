@@ -96,6 +96,7 @@ fn now_secs() -> i64 {
 }
 
 fn format_age(secs: i64) -> String {
+    let secs = secs.max(0);
     if secs < 60 {
         format!("{secs}s ago")
     } else if secs < 3_600 {
