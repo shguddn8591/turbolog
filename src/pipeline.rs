@@ -31,7 +31,7 @@ pub struct LocalPipeline {
     /// Number of distinct templates seen so far (caps at CALIBRATION_TEMPLATES).
     calibration_count: usize,
     threshold_override: Option<f32>,
-    seen_templates: std::collections::HashSet<u64>,
+    seen_templates: std::collections::HashSet<String>,
 }
 
 impl LocalPipeline {
@@ -53,11 +53,11 @@ impl LocalPipeline {
 
         // Calibration phase: accumulate novel template vectors.
         if self.detector.is_none() {
-            if self.seen_templates.insert(parsed.template.clone()) {
-                if self.calibration_count < CALIBRATION_TEMPLATES {
-                    self.calibration_buf.extend_from_slice(&vector);
-                    self.calibration_count += 1;
-                }
+            if self.seen_templates.insert(parsed.template.clone())
+                && self.calibration_count < CALIBRATION_TEMPLATES
+            {
+                self.calibration_buf.extend_from_slice(&vector);
+                self.calibration_count += 1;
             }
             if self.calibration_count >= CALIBRATION_TEMPLATES {
                 let k = CENTROID_K.min(self.calibration_count);

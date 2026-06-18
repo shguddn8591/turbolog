@@ -19,6 +19,17 @@ pub enum Command {
         /// Anomaly score floor override (default: auto-calibrated from data)
         #[arg(long)]
         threshold: Option<f32>,
+        /// Explain anomalies using a local LLM (auto-detects Ollama or LM Studio)
+        #[arg(long)]
+        explain: bool,
+        /// Local LLM base URL (e.g. http://localhost:11434). Overrides auto-detect.
+        /// Can also be set via TURBOLOG_LLM_URL env var.
+        #[arg(long)]
+        llm_url: Option<String>,
+        /// LLM model name (e.g. llama3.2, mistral). Overrides auto-detect default.
+        /// Can also be set via TURBOLOG_LLM_MODEL env var.
+        #[arg(long)]
+        llm_model: Option<String>,
     },
     /// Read stdin to EOF and print a summary report
     Scan {

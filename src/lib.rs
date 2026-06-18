@@ -12,6 +12,7 @@ pub mod engine;
 pub mod http;
 pub mod index;
 pub mod ingest;
+pub mod llm;
 pub mod metrics;
 pub mod pipeline;
 pub mod scan;
