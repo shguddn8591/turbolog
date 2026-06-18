@@ -9,6 +9,7 @@ pub mod cli;
 pub mod detect;
 pub mod embedded;
 pub mod engine;
+pub mod history;
 pub mod http;
 pub mod index;
 pub mod ingest;

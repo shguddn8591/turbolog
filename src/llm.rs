@@ -55,7 +55,16 @@ impl LlmClient {
     }
 
     /// Explains an anomalous log line. Returns `None` on error or timeout.
-    pub fn explain(&self, log_line: &str, score: f32) -> Option<String> {
+    /// `context` is an optional one-line history hint (e.g. "seen 3× in last 7 days").
+    pub fn explain(&self, log_line: &str, score: f32, context: Option<&str>) -> Option<String> {
+        let user_content = match context {
+            Some(ctx) => format!(
+                "Context: {ctx}\n\nAnomalous log line (score: {score:.2}, higher = more unusual):\n\n{log_line}"
+            ),
+            None => format!(
+                "Anomalous log line (score: {score:.2}, higher = more unusual):\n\n{log_line}"
+            ),
+        };
         let body = serde_json::json!({
             "model": self.model,
             "messages": [
@@ -68,9 +77,7 @@ impl LlmClient {
                 },
                 {
                     "role": "user",
-                    "content": format!(
-                        "Anomalous log line (score: {score:.2}, higher = more unusual):\n\n{log_line}"
-                    )
+                    "content": user_content
                 }
             ],
             "max_tokens": 120,

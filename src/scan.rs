@@ -5,6 +5,8 @@ use std::io::{BufRead, BufReader};
 use anyhow::Result;
 use serde::Serialize;
 
+use crate::history::HistoryStore;
+use crate::llm::LlmClient;
 use crate::pipeline::{LineResult, LocalPipeline};
 
 struct ScanEntry {
@@ -27,9 +29,16 @@ struct JsonAnomaly<'a> {
     score: f32,
     line: &'a str,
     template: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    explanation: Option<String>,
 }
 
-pub fn run_scan(pipeline: &mut LocalPipeline, format: &str) -> Result<()> {
+pub fn run_scan(
+    pipeline: &mut LocalPipeline,
+    format: &str,
+    llm: Option<&LlmClient>,
+    history: Option<&HistoryStore>,
+) -> Result<()> {
     let stdin = std::io::stdin();
     let reader = BufReader::new(stdin.lock());
     let mut entries: Vec<ScanEntry> = Vec::new();
@@ -54,7 +63,6 @@ pub fn run_scan(pipeline: &mut LocalPipeline, format: &str) -> Result<()> {
         0.0
     };
 
-    // Collect unique templates seen.
     let mut templates: std::collections::HashSet<&str> = std::collections::HashSet::new();
     for e in &entries {
         templates.insert(&e.result.template);
@@ -69,6 +77,27 @@ pub fn run_scan(pipeline: &mut LocalPipeline, format: &str) -> Result<()> {
     });
     let top: Vec<&ScanEntry> = top.into_iter().take(10).collect();
 
+    // Explain top 5, save all top 10 to history.
+    let explanations: Vec<Option<String>> = top
+        .iter()
+        .enumerate()
+        .map(|(i, e)| {
+            let score = e.result.score.unwrap_or(0.0);
+            let explanation = if i < 5 {
+                llm.and_then(|c| {
+                    let ctx = history.and_then(|h| h.context_for(&e.result.template));
+                    c.explain(&e.line, score, ctx.as_deref())
+                })
+            } else {
+                None
+            };
+            if let Some(h) = history {
+                let _ = h.insert(&e.result.template, &e.line, score, explanation.as_deref());
+            }
+            explanation
+        })
+        .collect();
+
     match format {
         "json" => {
             let report = JsonReport {
@@ -79,10 +108,12 @@ pub fn run_scan(pipeline: &mut LocalPipeline, format: &str) -> Result<()> {
                 calibrated: pipeline.calibrated(),
                 top_anomalies: top
                     .iter()
-                    .map(|e| JsonAnomaly {
+                    .zip(explanations.iter())
+                    .map(|(e, explanation)| JsonAnomaly {
                         score: e.result.score.unwrap_or(0.0),
                         line: &e.line,
                         template: &e.result.template,
+                        explanation: explanation.clone(),
                     })
                     .collect(),
             };
@@ -94,6 +125,7 @@ pub fn run_scan(pipeline: &mut LocalPipeline, format: &str) -> Result<()> {
             anomaly_count,
             rate,
             &top,
+            &explanations,
             pipeline.calibrated(),
         ),
     }
@@ -107,6 +139,7 @@ fn print_text_report(
     anomalies: usize,
     rate: f64,
     top: &[&ScanEntry],
+    explanations: &[Option<String>],
     calibrated: bool,
 ) {
     println!();
@@ -115,7 +148,9 @@ fn print_text_report(
     println!("Templates found : {templates}");
     println!("Anomalies       : {anomalies} ({rate:.2}%)");
     if !calibrated {
-        println!("Note            : Calibration incomplete (need 64 unique templates) — scores may be unreliable");
+        println!(
+            "Note            : Calibration incomplete (need 64 unique templates) — scores may be unreliable"
+        );
     }
     if top.is_empty() {
         println!();
@@ -123,15 +158,17 @@ fn print_text_report(
     } else {
         println!();
         println!("Top anomalies:");
-        for entry in top {
+        for (entry, explanation) in top.iter().zip(explanations.iter()) {
             let score = entry.result.score.unwrap_or(0.0);
-            // Truncate long lines for readability.
             let display = if entry.line.chars().count() > 120 {
                 format!("{}…", entry.line.chars().take(119).collect::<String>())
             } else {
                 entry.line.clone()
             };
             println!("  [score={score:.2}] {display}");
+            if let Some(exp) = explanation {
+                println!("    └─ {exp}");
+            }
         }
     }
     println!();
