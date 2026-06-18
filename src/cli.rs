@@ -36,6 +36,15 @@ pub enum Command {
         /// Output format: "text" (default) or "json"
         #[arg(long, default_value = "text")]
         format: String,
+        /// Explain top anomalies using a local LLM (auto-detects Ollama or LM Studio)
+        #[arg(long)]
+        explain: bool,
+        /// Local LLM base URL. Overrides auto-detect. Also: TURBOLOG_LLM_URL
+        #[arg(long)]
+        llm_url: Option<String>,
+        /// LLM model name. Overrides auto-detect default. Also: TURBOLOG_LLM_MODEL
+        #[arg(long)]
+        llm_model: Option<String>,
     },
     /// Real-time TUI dashboard connecting to a running TurboLog server
     Ui {

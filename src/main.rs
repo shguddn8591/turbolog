@@ -16,6 +16,7 @@ use clap::Parser;
 use turbolog::cli::{Cli, Command};
 use turbolog::embedded::make_embedder;
 use turbolog::engine::{EngineConfig, TurboLogEngine};
+use turbolog::history::HistoryStore;
 use turbolog::http::run_server;
 use turbolog::pipeline::LocalPipeline;
 
@@ -33,7 +34,12 @@ fn main() -> anyhow::Result<()> {
             llm_url,
             llm_model,
         } => run_watch_cmd(threshold, explain, llm_url.as_deref(), llm_model.as_deref()),
-        Command::Scan { format } => run_scan_cmd(&format),
+        Command::Scan {
+            format,
+            explain,
+            llm_url,
+            llm_model,
+        } => run_scan_cmd(&format, explain, llm_url.as_deref(), llm_model.as_deref()),
         Command::Ui { server, standalone } => run_ui_cmd(&server, standalone),
     }
 }
@@ -122,15 +128,42 @@ fn run_watch_cmd(
         None
     };
 
+    let history = HistoryStore::open().ok();
     eprintln!("[turbolog] streaming anomaly detection active (calibrating on first 64 templates)");
-    turbolog::watch::run_watch(&mut pipeline, llm.as_ref())
+    turbolog::watch::run_watch(&mut pipeline, llm.as_ref(), history.as_ref())
 }
 
-fn run_scan_cmd(format: &str) -> anyhow::Result<()> {
+fn run_scan_cmd(
+    format: &str,
+    explain: bool,
+    llm_url: Option<&str>,
+    llm_model: Option<&str>,
+) -> anyhow::Result<()> {
     let model_dir = PathBuf::from(env_or("TURBOLOG_MODEL_DIR", "./models"));
     let embedder = make_embedder(&model_dir)?;
     let mut pipeline = LocalPipeline::new(embedder, None);
-    turbolog::scan::run_scan(&mut pipeline, format)
+
+    let llm = if explain {
+        let client = turbolog::llm::LlmClient::detect(llm_url, llm_model);
+        match &client {
+            Some(c) => eprintln!(
+                "[turbolog] LLM connected: {} (model: {})",
+                c.base_url(),
+                c.model()
+            ),
+            None => {
+                eprintln!("[turbolog] --explain: no local LLM found");
+                eprintln!("  Ollama    → https://ollama.ai  (runs on :11434)");
+                eprintln!("  LM Studio → https://lmstudio.ai  (runs on :1234)");
+            }
+        }
+        client
+    } else {
+        None
+    };
+
+    let history = HistoryStore::open().ok();
+    turbolog::scan::run_scan(&mut pipeline, format, llm.as_ref(), history.as_ref())
 }
 
 fn run_ui_cmd(server: &str, standalone: bool) -> anyhow::Result<()> {
