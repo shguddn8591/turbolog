@@ -46,6 +46,21 @@ pub enum Command {
         #[arg(long)]
         llm_model: Option<String>,
     },
+    /// Query stored anomaly history
+    History {
+        /// Look back this far: 7d, 24h, 1h, 30m (default: 7d)
+        #[arg(long, default_value = "7d")]
+        since: String,
+        /// Filter by template substring
+        #[arg(long)]
+        template: Option<String>,
+        /// Output format: "text" (default) or "json"
+        #[arg(long, default_value = "text")]
+        format: String,
+        /// Maximum number of rows to show (default: 50)
+        #[arg(long, default_value = "50")]
+        limit: usize,
+    },
     /// Real-time TUI dashboard connecting to a running TurboLog server
     Ui {
         /// TurboLog server URL

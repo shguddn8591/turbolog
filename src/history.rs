@@ -12,6 +12,23 @@ use std::path::PathBuf;
 use anyhow::Result;
 use rusqlite::{params, Connection};
 
+pub struct HistoryQuery {
+    /// Look back this many seconds (None = all time).
+    pub since_secs: Option<i64>,
+    /// Substring filter on the template column.
+    pub template: Option<String>,
+    /// Maximum rows to return.
+    pub limit: usize,
+}
+
+pub struct HistoryEntry {
+    pub timestamp: i64,
+    pub template: String,
+    pub line: String,
+    pub score: f32,
+    pub explanation: Option<String>,
+}
+
 pub struct HistoryStore {
     conn: Connection,
 }
@@ -55,6 +72,39 @@ impl HistoryStore {
         Ok(())
     }
 
+    /// Query anomaly history with optional filters.
+    pub fn query(&self, q: &HistoryQuery) -> Result<Vec<HistoryEntry>> {
+        let cutoff = q.since_secs.map(|s| now_secs() - s).unwrap_or(0);
+        let limit = q.limit as i64;
+
+        let mut entries: Vec<HistoryEntry> = Vec::new();
+
+        if let Some(ref tmpl) = q.template {
+            let pattern = format!("%{tmpl}%");
+            let mut stmt = self.conn.prepare(
+                "SELECT timestamp, template, line, score, explanation
+                 FROM anomalies WHERE timestamp >= ?1 AND template LIKE ?2
+                 ORDER BY timestamp DESC LIMIT ?3",
+            )?;
+            let mut rows = stmt.query(params![cutoff, pattern, limit])?;
+            while let Some(row) = rows.next()? {
+                entries.push(map_history_row(row)?);
+            }
+        } else {
+            let mut stmt = self.conn.prepare(
+                "SELECT timestamp, template, line, score, explanation
+                 FROM anomalies WHERE timestamp >= ?1
+                 ORDER BY timestamp DESC LIMIT ?2",
+            )?;
+            let mut rows = stmt.query(params![cutoff, limit])?;
+            while let Some(row) = rows.next()? {
+                entries.push(map_history_row(row)?);
+            }
+        }
+
+        Ok(entries)
+    }
+
     /// Returns a one-line context string for the given template, e.g.
     /// "seen 3× in the last 7 days (last: 2h ago)" — or None if no prior history.
     pub fn context_for(&self, template: &str) -> Option<String> {
@@ -86,6 +136,16 @@ impl HistoryStore {
             "This log pattern has occurred {count}× in the last 7 days (last seen: {age})"
         ))
     }
+}
+
+fn map_history_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<HistoryEntry> {
+    Ok(HistoryEntry {
+        timestamp: row.get(0)?,
+        template: row.get(1)?,
+        line: row.get(2)?,
+        score: row.get::<_, f64>(3)? as f32,
+        explanation: row.get(4)?,
+    })
 }
 
 fn now_secs() -> i64 {

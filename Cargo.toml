@@ -2,9 +2,14 @@
 name = "turbolog"
 version = "0.2.0"
 edition = "2021"
-description = "Ultralight time-series log vector engine — real-time indexing & anomaly detection"
+description = "Ultralight log anomaly detection — no API key, no Python, pipe-friendly CLI with local LLM explain"
 license = "MIT"
 rust-version = "1.88"
+repository = "https://github.com/shguddn8591/turbolog"
+homepage = "https://github.com/shguddn8591/turbolog"
+keywords = ["logging", "anomaly-detection", "cli", "observability", "llm"]
+categories = ["command-line-utilities", "development-tools"]
+readme = "README.md"
 
 [features]
 default = []
