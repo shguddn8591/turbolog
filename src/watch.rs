@@ -54,6 +54,8 @@ fn print_result(line: &str, result: &LineResult, color: bool, llm: Option<&LlmCl
                     None => {
                         if color {
                             println!("  {DIM}└─ (LLM explanation unavailable){RESET}");
+                        } else {
+                            println!("  └─ (LLM explanation unavailable)");
                         }
                     }
                 }
