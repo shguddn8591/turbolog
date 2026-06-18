@@ -1,6 +1,6 @@
 [package]
 name = "turbolog"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 description = "Ultralight log anomaly detection — no API key, no Python, pipe-friendly CLI with local LLM explain"
 license = "MIT"
@@ -12,7 +12,7 @@ categories = ["command-line-utilities", "development-tools"]
 readme = "README.md"
 
 [features]
-default = []
+default = ["embedded-model"]
 embedded-model = []
 tui = ["dep:ratatui", "dep:crossterm"]
 

@@ -1,8 +1,14 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 
 use crate::ingest::Embedder;
+
+#[cfg(not(feature = "embedded-model"))]
+use std::path::PathBuf;
+
+#[cfg(not(feature = "embedded-model"))]
+use anyhow::anyhow;
 
 #[cfg(feature = "embedded-model")]
 pub static MODEL_BYTES: &[u8] = include_bytes!("../models/model.onnx");
@@ -15,14 +21,14 @@ pub static TOKENIZER_BYTES: &[u8] = include_bytes!("../models/tokenizer.json");
 ///   1. `model_dir` (explicit --model-dir or TURBOLOG_MODEL_DIR)
 ///   2. $XDG_DATA_HOME/turbolog/models  (~/.local/share/turbolog/models)
 /// If neither exists, downloads from Hugging Face automatically.
-pub fn make_embedder(model_dir: &Path) -> Result<Embedder> {
+pub fn make_embedder(_model_dir: &Path) -> Result<Embedder> {
     #[cfg(feature = "embedded-model")]
     {
         Embedder::from_bytes(MODEL_BYTES, TOKENIZER_BYTES)
     }
     #[cfg(not(feature = "embedded-model"))]
     {
-        let dir = resolve_model_dir(model_dir);
+        let dir = resolve_model_dir(_model_dir);
         ensure_models(&dir)?;
         Embedder::new(dir.join("model.onnx"), dir.join("tokenizer.json"))
     }
