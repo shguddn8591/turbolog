@@ -161,8 +161,9 @@ fn auto_calibration_then_detection() {
         .ingest_log("FATAL kernel panic at address 0xdeadbeef, halting node")
         .unwrap();
     let report = fatal.anomaly.expect("Anomaly should be detected");
-    assert!(report.score > 0.5);
-    assert!(!report.nearest_incidents.is_empty());
+    assert!(report.score > 0.5, "Anomaly score should exceed threshold");
+    assert!(!report.nearest_incidents.is_empty(), "Should have nearest incident references");
+    println!("Anomaly detected: score={:.3}, nearest incidents={:?}", report.score, report.nearest_incidents);
     std::fs::remove_dir_all(&data_dir).ok();
 }
 
