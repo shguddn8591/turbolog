@@ -40,6 +40,12 @@ fn main() -> anyhow::Result<()> {
             llm_url,
             llm_model,
         } => run_scan_cmd(&format, explain, llm_url.as_deref(), llm_model.as_deref()),
+        Command::History {
+            since,
+            template,
+            format,
+            limit,
+        } => run_history_cmd(&since, template.as_deref(), &format, limit),
         Command::Ui { server, standalone } => run_ui_cmd(&server, standalone),
     }
 }
@@ -164,6 +170,113 @@ fn run_scan_cmd(
 
     let history = HistoryStore::open().ok();
     turbolog::scan::run_scan(&mut pipeline, format, llm.as_ref(), history.as_ref())
+}
+
+fn run_history_cmd(
+    since: &str,
+    template: Option<&str>,
+    format: &str,
+    limit: usize,
+) -> anyhow::Result<()> {
+    let since_secs = parse_duration(since)
+        .ok_or_else(|| anyhow::anyhow!("Invalid --since value '{since}'. Use: 7d, 24h, 30m"))?;
+
+    let store = HistoryStore::open()?;
+    let entries = store.query(&turbolog::history::HistoryQuery {
+        since_secs: Some(since_secs),
+        template: template.map(|s| s.to_string()),
+        limit,
+    })?;
+
+    match format {
+        "json" => {
+            let json: Vec<serde_json::Value> = entries
+                .iter()
+                .map(|e| {
+                    serde_json::json!({
+                        "timestamp": e.timestamp,
+                        "template": e.template,
+                        "line": e.line,
+                        "score": e.score,
+                        "explanation": e.explanation,
+                    })
+                })
+                .collect();
+            println!("{}", serde_json::to_string_pretty(&json)?);
+        }
+        _ => {
+            if entries.is_empty() {
+                println!("No anomalies found in the last {since}.");
+            } else {
+                println!();
+                println!("--- TurboLog History (last {since}) ---");
+                println!("  {:<20}  {:<6}  line", "time", "score");
+                println!("  {}", "-".repeat(72));
+                for e in &entries {
+                    let dt = format_timestamp(e.timestamp);
+                    let display = if e.line.chars().count() > 60 {
+                        format!("{}…", e.line.chars().take(59).collect::<String>())
+                    } else {
+                        e.line.clone()
+                    };
+                    println!("  {:<20}  {:<6.2}  {}", dt, e.score, display);
+                    if let Some(ref exp) = e.explanation {
+                        println!("    └─ {exp}");
+                    }
+                }
+                println!();
+                println!(
+                    "Total: {} anomal{}",
+                    entries.len(),
+                    if entries.len() == 1 { "y" } else { "ies" }
+                );
+                println!();
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn parse_duration(s: &str) -> Option<i64> {
+    let s = s.trim();
+    if let Some(n) = s.strip_suffix('d') {
+        n.parse::<i64>().ok().map(|v| v * 86_400)
+    } else if let Some(n) = s.strip_suffix('h') {
+        n.parse::<i64>().ok().map(|v| v * 3_600)
+    } else if let Some(n) = s.strip_suffix('m') {
+        n.parse::<i64>().ok().map(|v| v * 60)
+    } else {
+        s.parse::<i64>().ok()
+    }
+}
+
+fn format_timestamp(ts: i64) -> String {
+    // ISO-like local time without pulling in chrono: print as UTC epoch + offset via std only.
+    // For simplicity, show as "YYYY-MM-DD HH:MM:SS" UTC.
+    let secs = ts as u64;
+    let s = secs % 60;
+    let m = (secs / 60) % 60;
+    let h = (secs / 3600) % 24;
+    let days = secs / 86_400;
+    // Days since Unix epoch → Gregorian. Tomohiko Sakamoto's algorithm.
+    let (year, month, day) = days_to_ymd(days);
+    format!("{year:04}-{month:02}-{day:02} {h:02}:{m:02}:{s:02}")
+}
+
+fn days_to_ymd(days: u64) -> (u64, u64, u64) {
+    // Civil calendar from days since 1970-01-01 (Howard Hinnant's algorithm).
+    let z = days + 719_468;
+    let era = z / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let mo = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if mo <= 2 { y + 1 } else { y };
+    (y, mo, d)
 }
 
 fn run_ui_cmd(server: &str, standalone: bool) -> anyhow::Result<()> {
