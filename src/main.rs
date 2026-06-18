@@ -94,14 +94,14 @@ fn run_serve() -> anyhow::Result<()> {
 }
 
 fn run_watch_cmd(
-    _threshold: Option<f32>,
+    threshold: Option<f32>,
     explain: bool,
     llm_url: Option<&str>,
     llm_model: Option<&str>,
 ) -> anyhow::Result<()> {
     let model_dir = PathBuf::from(env_or("TURBOLOG_MODEL_DIR", "./models"));
     let embedder = make_embedder(&model_dir)?;
-    let mut pipeline = LocalPipeline::new(embedder);
+    let mut pipeline = LocalPipeline::new(embedder, threshold);
 
     let llm = if explain {
         let client = turbolog::llm::LlmClient::detect(llm_url, llm_model);

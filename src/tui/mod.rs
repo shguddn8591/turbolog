@@ -81,7 +81,7 @@ pub fn run_ui(server_url: &str, standalone: bool) -> Result<()> {
         &mut last_sparkline_tick,
     );
 
-    if let Ok(_) = terminal.show_cursor() {}
+    let _ = terminal.show_cursor();
 
     result
 }
