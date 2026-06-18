@@ -23,7 +23,7 @@ By participating in this project, you agree to abide by our Code of Conduct (be 
    ```
 
 3. **Install Rust:**
-   Make sure you have Rust 1.70+ installed.
+   Make sure you have Rust 1.88+ installed.
    ```bash
    rustup update stable
    ```
@@ -47,7 +47,7 @@ We enforce strict formatting and linting rules to keep the codebase clean.
   cargo clippy --all-targets --all-features -- -D warnings
   ```
 - **No TODO Markers:** Avoid leaving unresolved `TODO`, `FIXME`, or `HACK` comments in release paths.
-- **MSRV:** We maintain compatibility with Rust `1.70.0`. Do not introduce language features that break older versions unless there's a strong consensus to bump the MSRV.
+- **MSRV:** We require Rust `1.88.0` (needed for ONNX runtime and edition 2024 dependencies). Do not introduce language features that break this version without a consensus MSRV bump.
 
 ## 🔬 Core Architecture Invariants
 
