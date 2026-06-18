@@ -25,36 +25,58 @@ Pipe your logs in, get anomalies out — with optional one-line AI explanations 
   └─ Connection pool likely exhausted or DB is down. Check pg_stat_activity and pool settings.
 ```
 
-**Under the hood**: Drain template extraction → all-MiniLM-L6-v2 ONNX embedding (CPU, no GPU) → k-means centroid anomaly detection. All in one binary, no external services.
+**Two AI layers — only one is required:**
+- **MiniLM** (built-in, always on): a 86 MB ONNX model baked into the binary. Powers anomaly detection. No API key, no internet at runtime.
+- **LLM** (optional, `--explain` only): calls your locally running [Ollama](https://ollama.ai) or [LM Studio](https://lmstudio.ai) to explain *why* a line looks anomalous. Zero config — TurboLog auto-detects them.
 
 ---
 
 ## Install
 
+**Step 1 — install Rust** (skip if you already have it):
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+**Step 2 — install TurboLog:**
+
 ```bash
 cargo install turbolog
 ```
 
-Or download a prebuilt binary from [Releases](https://github.com/shguddn8591/turbolog/releases).
+> The first build downloads the embedded MiniLM model (~86 MB) and bakes it into the binary.
+> After that, `turbolog` runs fully offline — no API key, no cloud.
+
+Alternatively, grab a prebuilt binary (no Rust needed) from [Releases](https://github.com/shguddn8591/turbolog/releases).
 
 ---
 
 ## Quick Start
 
+No log file? Paste this to try it immediately:
+
 ```bash
-# Real-time anomaly detection from stdin
-cat app.log | turbolog watch
+printf 'user login OK\nrequest processed in 12ms\nOOM killer activated for pid 4821\ndisk usage at 99%%\nuser login OK\nrequest processed in 8ms\n' \
+  | turbolog watch
+```
 
-# With LLM explanation (auto-detects Ollama on :11434 or LM Studio on :1234)
-cat app.log | turbolog watch --explain
+With your own logs:
 
-# Scan a file and print a report
+```bash
+# Scan a file and print an anomaly report
 turbolog scan < app.log
 
-# Scan with AI analysis of top anomalies
+# Real-time monitoring (pipe any stream)
+tail -f /var/log/app.log | turbolog watch
+
+# Add plain-English explanations (requires Ollama or LM Studio running locally)
+tail -f /var/log/app.log | turbolog watch --explain
+
+# Batch scan with AI analysis of top anomalies
 turbolog scan --explain < app.log
 
-# Scan and get machine-readable JSON
+# Machine-readable output
 turbolog scan --format json < app.log
 
 # Query stored anomaly history
