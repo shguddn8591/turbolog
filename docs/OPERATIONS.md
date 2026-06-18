@@ -27,7 +27,7 @@ Therefore, **collection agents/clients are pinned to a specific replica with a c
 
 ### Horizontal Scaling Calculation
 
-```
+```text
 1,000,000 concurrent requests/s
   ÷ Throughput per replica (e.g., 20,000 req/s, based on TURBOLOG_EMBEDDERS=4)
   = 50 replicas (HPA max)
@@ -38,7 +38,7 @@ That is, **Total Throughput = N replicas × Embedding workers per replica × Emb
 
 ### ASCII Architecture Diagram
 
-```
+```text
 Client/Collection Agent (Log Source)
         │
         ▼
@@ -127,7 +127,7 @@ The TurboLog app communicates only in plain text HTTP (port 8087) and assumes a 
 - **External → Ingress** segment: TLS 1.2+ (Ingress controller manages certificates)
 - If mTLS is required, configure it with the Istio/Linkerd sidecar pattern.
 
-```
+```text
 Client ─── TLS ─── [Ingress / ELB] ─── HTTP ─── TurboLog Pod
               (443)                         (8087)
 ```
@@ -221,7 +221,7 @@ scrape_configs:
 
 TurboLog gracefully shuts down in the following order upon receiving a SIGTERM:
 
-```
+```text
 SIGTERM Received
     │
     ├─ 1. Stop accepting new requests (Close tiny_http server)
@@ -245,7 +245,7 @@ SIGKILL is sent. In high throughput environments, consider increasing this value
 
 ### Storage File Structure
 
-```
+```text
 /data/
   ├── wal-<shard_id>.wal      # Write-Ahead Log (Binary)
   └── index-<shard_id>.tvim   # Index snapshot (Serialized vector index)
