@@ -1,7 +1,7 @@
 ---
 # TurboLog Service — ClusterIP
-# 클러스터 내부에서만 접근 가능. 외부 노출은 Ingress/LoadBalancer를 별도로 구성한다.
-# TLS 종단은 Ingress 또는 외부 LB에서 처리하며 앱은 평문 HTTP로 통신한다.
+# Accessible only within the cluster. External exposure is configured separately via Ingress/LoadBalancer.
+# TLS termination is handled by Ingress or external LB, and the app communicates via plain HTTP.
 apiVersion: v1
 kind: Service
 metadata:
@@ -11,7 +11,7 @@ metadata:
     app.kubernetes.io/name: turbolog
     app.kubernetes.io/component: engine
   annotations:
-    # Prometheus ServiceMonitor 없이 어노테이션 기반 스크레이프를 사용하는 경우
+    # When using annotation-based scraping without Prometheus ServiceMonitor
     prometheus.io/scrape: "true"
     prometheus.io/port: "8087"
     prometheus.io/path: "/metrics"

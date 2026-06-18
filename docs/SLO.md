@@ -1,27 +1,27 @@
 # TurboLog SLO (Service Level Objectives)
 
-> 100만 동시접속 서비스 운영을 위한 성능·가용성 목표와 실측 근거.
-> 측정 환경: **Apple M5 (10코어) / 32GB RAM / rustc 1.95.0 / release(LTO)**, 단일 노드.
+> Performance/availability targets and measured basis for operating a service with 1M concurrent connections.
+> Measurement environment: **Apple M5 (10-core) / 32GB RAM / rustc 1.95.0 / release(LTO)**, single node.
 
-## 1. 목표 (SLO)
+## 1. Objectives (SLO)
 
-| 항목 | 목표 | 실측(단일 노드) | 비고 |
+| Item | Target | Measured (Single Node) | Remarks |
 |---|---|---|---|
-| 인입 처리량 (캐시 적중) | ≥ 30,000 logs/s/node | **52,800 logs/s** | 템플릿 캐시 적중 경로 |
-| 인입 지연 p50 | ≤ 100µs | **15.5µs** | |
-| 인입 지연 p99 | ≤ 1ms | **29.6µs** | |
-| 인입 지연 max | ≤ 100ms | 87.8ms | WAL 성장 중 OS 쓰기 스톨(50k 중 1건) |
-| 검색 지연 p50 (임베딩 포함) | ≤ 15ms | **8.9ms** | 임베딩(ONNX)이 지배적 |
-| 검색 지연 p99 (임베딩 포함) | ≤ 20ms | **11.0ms** | |
-| 임베딩 처리량 (캐시 미스 상한) | ≥ 100 embeds/s/embedder | **136 embeds/s** | ONNX MiniLM-L6-v2 CPU |
-| HTTP /logs 처리량 (배치 10) | ≥ 30,000 logs/s/node | **42,200 logs/s** | 4 클라이언트 |
-| 미스 폭풍 내성 (적중 경로) | ≥ 30,000 logs/s | **57,900 logs/s** | 신규 템플릿 폭주 중에도 적중 경로 비차단 |
-| 캐시 적중률 (정상 트래픽) | ≥ 0.99 | **0.9994** | |
-| 가용성 | ≥ 99.9% | — | 다중 레플리카 + PDB로 달성 (운영) |
+| Ingestion throughput (Cache hit) | ≥ 30,000 logs/s/node | **52,800 logs/s** | Template cache hit path |
+| Ingestion latency p50 | ≤ 100µs | **15.5µs** | |
+| Ingestion latency p99 | ≤ 1ms | **29.6µs** | |
+| Ingestion latency max | ≤ 100ms | 87.8ms | OS write stall during WAL growth (1 in 50k) |
+| Search latency p50 (including embedding) | ≤ 15ms | **8.9ms** | Embedding (ONNX) is dominant |
+| Search latency p99 (including embedding) | ≤ 20ms | **11.0ms** | |
+| Embedding throughput (Cache miss cap) | ≥ 100 embeds/s/embedder | **136 embeds/s** | ONNX MiniLM-L6-v2 CPU |
+| HTTP /logs throughput (Batch 10) | ≥ 30,000 logs/s/node | **42,200 logs/s** | 4 clients |
+| Miss storm resilience (Hit path) | ≥ 30,000 logs/s | **57,900 logs/s** | Hit path is non-blocking even during new template storms |
+| Cache hit rate (Normal traffic) | ≥ 0.99 | **0.9994** | |
+| Availability | ≥ 99.9% | — | Achieved via multi-replica + PDB (production) |
 
-## 2. 멀티스레드 확장성 (핵심)
+## 2. Multi-thread Scalability (Core)
 
-동일 노드에서 N개 스레드가 동시에 `ingest_log`를 호출했을 때의 확장성:
+Scalability when N threads call `ingest_log` simultaneously on the same node:
 
 | threads | logs/s | scale vs 1T |
 |---|---|---|
@@ -30,47 +30,47 @@
 | 4 | 56,465 | 0.87x |
 | 10 | 55,549 | 0.86x |
 
-**해석**: `main` 기준(비샤딩) 코드에서는 단일 글로벌 쓰기 락(`wal: Mutex<Wal>`)이 모든 인입을 직렬화해 스레드를 늘려도 처리량이 늘지 않는다(오히려 락 경합으로 소폭 하락). 이 병목은 **WS1 샤딩 인입 엔진**(`feat/sharded-engine`, 샤드별 독립 WAL/인덱스, `id % N` 라우팅)에서 제거된다. 샤딩 후에는 코어 수에 비례한 확장이 기대된다.
+**Interpretation**: In the `main` baseline (unsharded) code, a single global write lock (`wal: Mutex<Wal>`) serializes all ingestions, so throughput does not increase with more threads (it slightly drops due to lock contention). This bottleneck is removed in the **WS1 Sharded Ingestion Engine** (`feat/sharded-engine`, independent WAL/index per shard, `id % N` routing). After sharding, proportional scaling to the number of cores is expected.
 
-## 3. 측정 방법 (재현)
+## 3. Measurement Method (Reproduction)
 
 ```bash
-# 모델 준비 (최초 1회)
+# Model preparation (First time only)
 ./scripts/download_model.sh
 
-# 부하 테스트 (위 표의 [1]~[7] 항목 출력)
+# Load test (Outputs items [1]~[7] from the table above)
 cargo run --release --example loadtest
 
-# 마이크로 벤치 (모델 비의존 핫패스: parse/cache/detect/index)
+# Micro benchmark (Model-independent hot paths: parse/cache/detect/index)
 cargo bench
 ```
 
-`cargo bench`는 `benches/throughput.rs`의 4개 그룹을 측정한다:
-- `template_parse` — Drain 파싱 처리량
-- `cache_lookup` — 템플릿 캐시 적중 조회
-- `anomaly_detect` — K-centroid Tier 1 거리/판정
-- `index_ingest_search` — turbovec 인덱스 ingest/search
+`cargo bench` measures 4 groups in `benches/throughput.rs`:
+- `template_parse` — Drain parsing throughput
+- `cache_lookup` — Template cache hit lookup
+- `anomaly_detect` — K-centroid Tier 1 distance/decision
+- `index_ingest_search` — turbovec index ingest/search
 
-## 4. 100만 동시접속 용량 산정
+## 4. 1M Concurrent Connections Capacity Estimation
 
-단일 노드 인입 처리량을 **보수적으로 30,000 logs/s/node**로 잡으면:
+If we **conservatively set the single node ingestion throughput to 30,000 logs/s/node**:
 
 ```
-필요 레플리카 = 목표 처리량 / 노드당 처리량
+Required replicas = Target throughput / Throughput per node
 ```
 
-| 목표 인입 처리량 | 필요 레플리카(30k/node) | 권장(여유 30%) |
+| Target Ingestion Throughput | Required Replicas (30k/node) | Recommended (30% Margin) |
 |---|---|---|
 | 300,000 logs/s | 10 | 13 |
 | 1,000,000 logs/s | 34 | 44 |
 | 3,000,000 logs/s | 100 | 130 |
 
-- **수평확장 전제**: 클라이언트/수집 에이전트를 테넌트·스트림 키 기준으로 일관 해시 LB를 통해 특정 레플리카에 고정한다(노드별 인메모리 인덱스가 상태풀이므로). 노드 내부는 다시 코어 수만큼 샤딩(WS1)된다.
-- HPA(`deploy/k8s/hpa.yaml`)는 CPU 70% 기준 min 6 / max 50으로 자동 확장하며, `turbolog_inflight_requests` 커스텀 메트릭으로 확장 가능.
-- 자세한 토폴로지·운영 절차는 `docs/OPERATIONS.md` 참고.
+- **Horizontal scaling premise**: Clients/collection agents are pinned to a specific replica via consistent hashing LB based on tenant/stream keys (since the per-node in-memory index is stateful). The interior of the node is sharded again by the number of cores (WS1).
+- HPA (`deploy/k8s/hpa.yaml`) automatically scales from min 6 / max 50 based on 70% CPU, and can be scaled with the `turbolog_inflight_requests` custom metric.
+- Refer to `docs/OPERATIONS.md` for detailed topology and operational procedures.
 
-## 5. 한계와 가정
+## 5. Limitations and Assumptions
 
-- 임베딩(캐시 미스)은 CPU ONNX 추론으로 노드당 ~136 embeds/s가 상한이다. 정상 운영에서는 캐시 적중률 ≥0.99로 미스가 드물지만, 신규 템플릿 폭주 시 미스 경로가 병목이 될 수 있다(적중 경로는 비차단 유지). 미스 처리량이 더 필요하면 `TURBOLOG_EMBEDDERS`를 늘리거나(메모리 ~90MB/embedder) 임베더를 별도 워커로 횡적 확장한다.
-- 검색 지연은 임베딩 시간이 지배적이다. 쿼리 임베딩 캐시/사전계산으로 추가 단축 가능.
-- max 인입 지연 스파이크(~87ms, 5만 건 중 1건)는 WAL 파일 성장 중 OS 쓰기 스톨로 추정되며 p99에는 영향이 없다.
+- Embeddings (cache misses) have an upper limit of ~136 embeds/s per node due to CPU ONNX inference. In normal operation, misses are rare with a cache hit rate ≥0.99, but during a storm of new templates, the miss path can become a bottleneck (hit path remains non-blocking). If more miss throughput is needed, increase `TURBOLOG_EMBEDDERS` (memory ~90MB/embedder) or horizontally scale the embedder as a separate worker.
+- Search latency is dominated by embedding time. Further reduction is possible with query embedding caching/pre-calculation.
+- Max ingestion latency spikes (~87ms, 1 in 50k) are assumed to be OS write stalls during WAL file growth and do not impact p99.

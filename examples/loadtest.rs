@@ -1,13 +1,13 @@
-//! 부하 테스트 하니스 — `cargo run --release --example loadtest`
+//! Load test harness — `cargo run --release --example loadtest`
 //!
-//! 측정 항목:
-//! 1. 임베딩 원시 처리량 (Cache Miss 경로의 상한)
-//! 2. 엔진 인입 처리량 — 캐시 적중 경로 (스펙 목표: 초당 수천 건)
-//! 3. 동시 부하: ingest + 1초 주기 스왑 + 검색 레이턴시 p50/p99
-//! 4. 엣지케이스 프로브: 초장문 로그 라인
-//! 5. HTTP 경로 처리량 (배치 10건 POST /logs)
-//! 6. 미스 폭풍 내성
-//! 7. 멀티스레드 동시 인입 경합 (글로벌 쓰기 락 확장성)
+//! Metrics:
+//! 1. Embedding raw throughput (upper bound of Cache Miss path)
+//! 2. Engine ingestion throughput — cache hit path (spec goal: thousands per second)
+//! 3. Concurrent load: ingest + 1s swap + search latency p50/p99
+//! 4. Edge case probe: extremely long log lines
+//! 5. HTTP path throughput (batch 10 POST /logs)
+//! 6. Miss storm tolerance
+//! 7. Multi-threaded concurrent ingestion contention (global write lock scalability)
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -55,14 +55,14 @@ fn main() -> anyhow::Result<()> {
     let models = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("models");
     anyhow::ensure!(
         models.join("model.onnx").exists(),
-        "먼저 ./scripts/download_model.sh 실행"
+        "run ./scripts/download_model.sh first"
     );
     let data_dir = std::env::temp_dir().join(format!("turbolog_loadtest_{}", std::process::id()));
     std::fs::remove_dir_all(&data_dir).ok();
 
-    println!("== TurboLog 부하 테스트 (release) ==\n");
+    println!("== TurboLog Load Test (release) ==\n");
 
-    // ── 1) 임베딩 원시 처리량 (Cache Miss 경로 상한) ──
+    // ── 1) Embedding raw throughput (Cache Miss path upper bound) ──
     {
         let mut embedder = Embedder::new(models.join("model.onnx"), models.join("tokenizer.json"))?;
         let n = 100;
@@ -72,7 +72,7 @@ fn main() -> anyhow::Result<()> {
         }
         let el = t.elapsed();
         println!(
-            "[1] 임베딩(ONNX 추론): {:.0} embeds/s  (평균 {:.2} ms/건) — Cache Miss 경로 상한",
+            "[1] Embedding (ONNX inference): {:.0} embeds/s  (avg {:.2} ms/item) — Cache Miss path upper bound",
             n as f64 / el.as_secs_f64(),
             el.as_secs_f64() * 1000.0 / n as f64
         );
@@ -87,17 +87,17 @@ fn main() -> anyhow::Result<()> {
     let embedder = Embedder::new(models.join("model.onnx"), models.join("tokenizer.json"))?;
     let engine = Arc::new(TurboLogEngine::open(cfg, vec![embedder])?);
 
-    // 워밍업: 템플릿 캐시 + 캘리브레이션
+    // Warm-up: template cache + calibration
     for i in 0..TEMPLATES * 3 {
         engine.ingest_log(&make_log(i))?;
     }
     engine.swap_tick()?;
     println!(
-        "    워밍업 완료 (detector_calibrated={})\n",
+        "    Warm-up completed (detector_calibrated={})\n",
         engine.stats().detector_calibrated
     );
 
-    // ── 2) 인입 처리량 — 캐시 적중 경로 ──
+    // ── 2) Ingestion throughput — cache hit path ──
     {
         let n = 50_000;
         let mut lat = Vec::with_capacity(n);
@@ -110,7 +110,7 @@ fn main() -> anyhow::Result<()> {
         let el = t.elapsed();
         lat.sort();
         println!(
-            "[2] 엔진 인입(캐시 적중): {:.0} logs/s  (n={n}, p50={:?}, p99={:?}, max={:?})",
+            "[2] Engine ingestion (cache hit): {:.0} logs/s  (n={n}, p50={:?}, p99={:?}, max={:?})",
             n as f64 / el.as_secs_f64(),
             percentile(&lat, 0.50),
             percentile(&lat, 0.99),
@@ -119,7 +119,7 @@ fn main() -> anyhow::Result<()> {
         engine.swap_tick()?;
     }
 
-    // ── 3) 동시 부하: ingest + 1초 스왑 + 검색 p50/p99 ──
+    // ── 3) Concurrent load: ingest + 1s swap + search p50/p99 ──
     {
         let stop = Arc::new(AtomicBool::new(false));
         let ingested = Arc::new(AtomicU64::new(0));
@@ -163,7 +163,7 @@ fn main() -> anyhow::Result<()> {
         let mut search_lat = searcher.join().unwrap();
         search_lat.sort();
         println!(
-            "[3] 동시 부하 인입: {:.0} logs/s  | 검색(임베딩 포함) p50={:?}, p99={:?} (n={})",
+            "[3] Concurrent load ingestion: {:.0} logs/s  | search (including embedding) p50={:?}, p99={:?} (n={})",
             n as f64 / el.as_secs_f64(),
             percentile(&search_lat, 0.50),
             percentile(&search_lat, 0.99),
@@ -171,24 +171,24 @@ fn main() -> anyhow::Result<()> {
         );
     }
 
-    // ── 4) 엣지케이스 프로브 ──
+    // ── 4) Edge case probe ──
     {
-        let long_line = "ERROR stack overflow ".repeat(2000); // ~42,000자
+        let long_line = "ERROR stack overflow ".repeat(2000); // ~42,000 chars
         match engine.ingest_log(&long_line) {
             Ok(r) => println!(
-                "[4] 초장문(42k자) 로그: OK (id={}, anomaly={})",
+                "[4] Extremely long (42k chars) log: OK (id={}, anomaly={})",
                 r.id,
                 r.anomaly.is_some()
             ),
-            Err(e) => println!("[4] 초장문(42k자) 로그: ERROR — {e:#}"),
+            Err(e) => println!("[4] Extremely long (42k chars) log: ERROR — {e:#}"),
         }
         match engine.ingest_log("") {
-            Ok(_) => println!("    빈 문자열 로그: OK"),
-            Err(e) => println!("    빈 문자열 로그: ERROR — {e:#}"),
+            Ok(_) => println!("    Empty string log: OK"),
+            Err(e) => println!("    Empty string log: ERROR — {e:#}"),
         }
     }
 
-    // ── 5) HTTP 경로 (배치 10건 × 4 클라이언트 스레드) ──
+    // ── 5) HTTP path (batch 10 × 4 client threads) ──
     {
         let (addr, _h) = run_server(Arc::clone(&engine), "127.0.0.1:0", 4, None)?;
         let url = format!("http://{addr}/logs");
@@ -217,14 +217,14 @@ fn main() -> anyhow::Result<()> {
         let el = t.elapsed();
         let total_logs = 4 * reqs_per_thread * batch;
         println!(
-            "[5] HTTP /logs (4 클라이언트, 배치 {batch}): {:.0} logs/s ({:.0} req/s)",
+            "[5] HTTP /logs (4 clients, batch {batch}): {:.0} logs/s ({:.0} req/s)",
             total_logs as f64 / el.as_secs_f64(),
             (4 * reqs_per_thread) as f64 / el.as_secs_f64()
         );
     }
 
-    // ── 6) 미스 폭풍 내성: 신규 템플릿 폭주 중 적중 경로 처리량 ──
-    // 수정 전에는 캐시 락이 ONNX 추론까지 직렬화해 적중 경로도 ~136 logs/s로 붕괴했다.
+    // ── 6) Miss storm tolerance: hit path throughput during new template burst ──
+    // Before fixing, the cache lock serialized even ONNX inference, causing the hit path to collapse to ~136 logs/s.
     {
         let stop = Arc::new(AtomicBool::new(false));
         let storm = {
@@ -232,7 +232,7 @@ fn main() -> anyhow::Result<()> {
             let stop = Arc::clone(&stop);
             std::thread::spawn(move || {
                 let mut embedded = 0u64;
-                // 토큰 수가 모두 다른 고유 패턴 → 강제 캐시 미스 연속
+                // Unique patterns with different token counts → consecutive forced cache misses
                 for i in 0..400 {
                     if stop.load(Ordering::Relaxed) {
                         break;
@@ -247,8 +247,8 @@ fn main() -> anyhow::Result<()> {
             })
         };
 
-        // 폭풍이 도는 동안 적중 경로 처리량 측정 (2초간)
-        std::thread::sleep(Duration::from_millis(100)); // 폭풍 워밍업
+        // Measure hit path throughput during the storm (for 2 seconds)
+        std::thread::sleep(Duration::from_millis(100)); // Storm warm-up
         let t = Instant::now();
         let mut hits = 0u64;
         while t.elapsed() < Duration::from_secs(2) {
@@ -259,26 +259,26 @@ fn main() -> anyhow::Result<()> {
         stop.store(true, Ordering::Relaxed);
         let storm_count = storm.join().unwrap();
         println!(
-            "[6] 미스 폭풍 내성: 적중 경로 {:.0} logs/s (폭풍 중 신규 템플릿 {}건 처리)",
+            "[6] Miss storm tolerance: hit path {:.0} logs/s (processed {} new templates during storm)",
             hits as f64 / el.as_secs_f64(),
             storm_count
         );
     }
 
-    // ── 7) 멀티스레드 동시 인입 경합: 글로벌 쓰기 락 확장성 측정 ──
-    // N개 스레드가 동시에 engine.ingest_log를 호출해 총 처리량과 스레드 수 대비
-    // 선형 확장성을 출력한다. 캐시 적중 경로를 유지해 WAL 락 경합만 노출함.
-    // 1T 대비 확장 배수(scale)가 낮을수록 샤딩 개선의 여지가 크다.
+    // ── 7) Multi-threaded concurrent ingestion contention: measure global write lock scalability ──
+    // N threads simultaneously call engine.ingest_log to output total throughput and linear
+    // scalability against the number of threads. Maintains the cache hit path to expose only WAL lock contention.
+    // The lower the scale multiplier compared to 1T, the greater the room for sharding improvement.
     {
         let parallelism = std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(4);
 
-        println!("\n[7] 멀티스레드 동시 인입 경합 (available_parallelism={parallelism})");
+        println!("\n[7] Multi-threaded concurrent ingestion contention (available_parallelism={parallelism})");
         println!("    threads | logs/s       | scale vs 1T");
         println!("    --------|--------------|------------");
 
-        // 1-스레드 기준 측정 (20,000건)
+        // Baseline 1-thread measurement (20,000 items)
         let single_tps = {
             let n = 20_000usize;
             let t = Instant::now();
@@ -289,7 +289,7 @@ fn main() -> anyhow::Result<()> {
         };
         println!("    {:7} | {:12.0} | {:.2}x", 1, single_tps, 1.0f64);
 
-        // 2T, 4T, available_parallelism T 측정
+        // Measure 2T, 4T, available_parallelism T
         let thread_counts: Vec<usize> = {
             let mut v = vec![2usize, 4];
             if parallelism > 4 {
@@ -307,7 +307,7 @@ fn main() -> anyhow::Result<()> {
                     let engine = Arc::clone(&engine);
                     let barrier = Arc::clone(&barrier);
                     std::thread::spawn(move || {
-                        barrier.wait(); // 모든 스레드 동시 출발
+                        barrier.wait(); // All threads start simultaneously
                         let t0 = Instant::now();
                         for i in 0..n_per_thread {
                             engine.ingest_log(&make_log(w * n_per_thread + i)).unwrap();
@@ -318,7 +318,7 @@ fn main() -> anyhow::Result<()> {
                 .collect();
             let durations: Vec<Duration> =
                 threads.into_iter().map(|th| th.join().unwrap()).collect();
-            // 총 처리량 = 전체 logs ÷ 가장 오래 걸린 스레드 벽시계 기준
+            // Total throughput = total logs ÷ wall clock of the longest-running thread
             let max_dur = durations.iter().max().unwrap();
             let total_logs = t_count * n_per_thread;
             let tps = total_logs as f64 / max_dur.as_secs_f64();
@@ -329,7 +329,7 @@ fn main() -> anyhow::Result<()> {
 
     let s = engine.stats();
     println!(
-        "\n== 최종 stats: ingested={}, cache_hit_rate={:.4}, ring_windows={}, ring_vectors={} ==",
+        "\n== Final stats: ingested={}, cache_hit_rate={:.4}, ring_windows={}, ring_vectors={} ==",
         s.ingested_total, s.cache_hit_rate, s.ring_windows, s.ring_vectors
     );
     std::fs::remove_dir_all(&data_dir).ok();
