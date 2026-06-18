@@ -130,7 +130,7 @@ fn auto_calibration_then_detection() {
 
     assert!(!engine.stats().detector_calibrated);
     // 5 normal templates -> Auto-freeze when calibration_templates=5 is reached
-    for i in 0..20 {
+    for i in 0..50 {
         engine
             .ingest_log(&format!("connection accepted from 10.0.0.{i} port 5432"))
             .unwrap();
