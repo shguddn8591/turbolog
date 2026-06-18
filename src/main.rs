@@ -214,7 +214,7 @@ fn run_history_cmd(
                 println!("  {}", "-".repeat(72));
                 for e in &entries {
                     let dt = format_timestamp(e.timestamp);
-                    let display = if e.line.chars().count() > 60 {
+                    let display = if e.line.chars().nth(60).is_some() {
                         format!("{}…", e.line.chars().take(59).collect::<String>())
                     } else {
                         e.line.clone()
@@ -241,20 +241,19 @@ fn run_history_cmd(
 fn parse_duration(s: &str) -> Option<i64> {
     let s = s.trim();
     if let Some(n) = s.strip_suffix('d') {
-        n.parse::<i64>().ok().map(|v| v * 86_400)
+        n.parse::<i64>().ok().and_then(|v| v.checked_mul(86_400))
     } else if let Some(n) = s.strip_suffix('h') {
-        n.parse::<i64>().ok().map(|v| v * 3_600)
+        n.parse::<i64>().ok().and_then(|v| v.checked_mul(3_600))
     } else if let Some(n) = s.strip_suffix('m') {
-        n.parse::<i64>().ok().map(|v| v * 60)
+        n.parse::<i64>().ok().and_then(|v| v.checked_mul(60))
     } else {
         s.parse::<i64>().ok()
     }
 }
 
 fn format_timestamp(ts: i64) -> String {
-    // ISO-like local time without pulling in chrono: print as UTC epoch + offset via std only.
-    // For simplicity, show as "YYYY-MM-DD HH:MM:SS" UTC.
-    let secs = ts as u64;
+    // Show as "YYYY-MM-DD HH:MM:SS" UTC using only std (no chrono).
+    let secs = ts.max(0) as u64;
     let s = secs % 60;
     let m = (secs / 60) % 60;
     let h = (secs / 3600) % 24;

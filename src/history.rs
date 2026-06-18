@@ -88,13 +88,7 @@ impl HistoryStore {
             )?;
             let mut rows = stmt.query(params![cutoff, pattern, limit])?;
             while let Some(row) = rows.next()? {
-                entries.push(HistoryEntry {
-                    timestamp: row.get(0)?,
-                    template: row.get(1)?,
-                    line: row.get(2)?,
-                    score: row.get::<_, f64>(3)? as f32,
-                    explanation: row.get(4)?,
-                });
+                entries.push(map_history_row(row)?);
             }
         } else {
             let mut stmt = self.conn.prepare(
@@ -104,13 +98,7 @@ impl HistoryStore {
             )?;
             let mut rows = stmt.query(params![cutoff, limit])?;
             while let Some(row) = rows.next()? {
-                entries.push(HistoryEntry {
-                    timestamp: row.get(0)?,
-                    template: row.get(1)?,
-                    line: row.get(2)?,
-                    score: row.get::<_, f64>(3)? as f32,
-                    explanation: row.get(4)?,
-                });
+                entries.push(map_history_row(row)?);
             }
         }
 
@@ -148,6 +136,16 @@ impl HistoryStore {
             "This log pattern has occurred {count}× in the last 7 days (last seen: {age})"
         ))
     }
+}
+
+fn map_history_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<HistoryEntry> {
+    Ok(HistoryEntry {
+        timestamp: row.get(0)?,
+        template: row.get(1)?,
+        line: row.get(2)?,
+        score: row.get::<_, f64>(3)? as f32,
+        explanation: row.get(4)?,
+    })
 }
 
 fn now_secs() -> i64 {
