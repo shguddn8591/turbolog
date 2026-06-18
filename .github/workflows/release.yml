@@ -35,11 +35,6 @@ jobs:
             binary: turbolog
             archive: turbolog-aarch64-macos.tar.gz
 
-          - target: x86_64-apple-darwin
-            os: macos-latest
-            binary: turbolog
-            archive: turbolog-x86_64-macos.tar.gz
-
     steps:
       - uses: actions/checkout@v4
 
