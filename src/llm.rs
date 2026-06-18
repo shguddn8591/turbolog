@@ -25,15 +25,16 @@ impl LlmClient {
         let url_env = std::env::var("TURBOLOG_LLM_URL").ok();
         let model_env = std::env::var("TURBOLOG_LLM_MODEL").ok();
 
-        let url = url_override
-            .or(url_env.as_deref());
-        let model = model_override
-            .or(model_env.as_deref());
+        let url = url_override.or(url_env.as_deref());
+        let model = model_override.or(model_env.as_deref());
 
         if let Some(url) = url {
             let url = url.trim_end_matches('/').to_string();
             let m = model.unwrap_or(DEFAULT_MODEL_OLLAMA).to_string();
-            return Some(Self { base_url: url, model: m });
+            return Some(Self {
+                base_url: url,
+                model: m,
+            });
         }
 
         // Auto-detect order: Ollama → LM Studio
@@ -43,7 +44,10 @@ impl LlmClient {
         ] {
             if Self::is_reachable(base) {
                 let m = model.unwrap_or(default_model).to_string();
-                return Some(Self { base_url: base.to_string(), model: m });
+                return Some(Self {
+                    base_url: base.to_string(),
+                    model: m,
+                });
             }
         }
 
@@ -86,7 +90,11 @@ impl LlmClient {
             .trim()
             .to_string();
 
-        if text.is_empty() { None } else { Some(text) }
+        if text.is_empty() {
+            None
+        } else {
+            Some(text)
+        }
     }
 
     pub fn base_url(&self) -> &str {
