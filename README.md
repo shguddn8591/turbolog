@@ -105,7 +105,7 @@ turbolog scan --format json --explain < app.log
 
 | Flag | Description |
 |---|---|
-| `--format text\|json` | Output format (default: `text`) |
+| <code>--format text&#124;json</code> | Output format (default: `text`) |
 | `--explain` | Explain top 5 anomalies with local LLM |
 | `--llm-url`, `--llm-model` | Same as `watch` |
 
@@ -142,7 +142,7 @@ turbolog history --format json               # JSON output for piping
 |---|---|
 | `--since <DURATION>` | Look back this far: `7d`, `24h`, `1h`, `30m` (default: `7d`) |
 | `--template <PATTERN>` | Filter by Drain template substring |
-| `--format text\|json` | Output format (default: `text`) |
+| <code>--format text&#124;json</code> | Output format (default: `text`) |
 | `--limit <N>` | Max rows to return (default: `50`) |
 
 When `--explain` is active in `watch` or `scan`, history entries also store the LLM explanation and use it as context for future occurrences of the same pattern:
