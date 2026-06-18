@@ -1,18 +1,18 @@
 ---
 # TurboLog Deployment
 #
-# 설계 결정:
-#   - TurboLog는 인메모리 인덱스(arc-swap 기반)를 가진 상태풀(stateful-lite) 서비스다.
-#     각 레플리카는 독립된 인덱스 샤드를 담당하며, 클라이언트는 일관 해시(consistent hash)
-#     LB(예: Nginx/Envoy의 hash_policy)로 동일 레플리카에 라우팅된다.
-#   - WAL(.wal)과 인덱스 스냅샷(.tvim)은 /data 볼륨에 기록된다.
-#     단기 운영은 emptyDir(노드 로컬)로 충분하나, 영속성이 필요하면 PVC로 교체한다.
-#   - 모델 파일(model.onnx, tokenizer.json)은 initContainer가 /models emptyDir에 다운로드한다.
-#     사전 굽는(bake) 방식보다 이미지를 가볍게 유지할 수 있다.
-#   - resources.limits.memory 계산 근거:
-#       임베더 2개 × ~90 MB = ~180 MB
-#       인덱스 + WAL 버퍼 + 힙  ≈ 300 MB
-#       합계 ≈ 512 MB (여유 포함 768 Mi 권장)
+# Design decisions:
+#   - TurboLog is a stateful-lite service with an in-memory index (arc-swap based).
+#     Each replica is responsible for an independent index shard, and clients are routed
+#     to the same replica using a consistent hash LB (e.g., Nginx/Envoy's hash_policy).
+#   - The WAL (.wal) and index snapshots (.tvim) are written to the /data volume.
+#     For short-term operations, emptyDir (node local) is sufficient, but replace with PVC if persistence is needed.
+#   - Model files (model.onnx, tokenizer.json) are downloaded by an initContainer into a /models emptyDir.
+#     This keeps the image lightweight compared to baking them in.
+#   - resources.limits.memory calculation basis:
+#       2 embedders * ~90 MB = ~180 MB
+#       Index + WAL buffer + Heap ≈ 300 MB
+#       Total ≈ 512 MB (768 Mi recommended including margin)
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -23,7 +23,7 @@ metadata:
     app.kubernetes.io/version: "0.1.0"
     app.kubernetes.io/component: engine
   annotations:
-    # Prometheus 스크레이프 설정 — ServiceMonitor 미사용 시 이 어노테이션으로 동작
+    # Prometheus scrape settings — Works with this annotation when ServiceMonitor is not used
     prometheus.io/scrape: "true"
     prometheus.io/port: "8087"
     prometheus.io/path: "/metrics"
@@ -35,7 +35,7 @@ spec:
   strategy:
     type: RollingUpdate
     rollingUpdate:
-      # PDB(minAvailable: 4)와 맞춰 동시에 최대 2개 교체
+      # Matches PDB (minAvailable: 4) to replace up to 2 concurrently
       maxUnavailable: 2
       maxSurge: 2
   template:
@@ -49,10 +49,10 @@ spec:
         prometheus.io/path: "/metrics"
     spec:
       # ────────────────────────────────────────────
-      # initContainer: 모델 파일 다운로드
+      # initContainer: Download model files
       # ────────────────────────────────────────────
-      # 실제 운영에서는 아래 URL을 내부 아티팩트 스토리지(S3, GCS, Harbor)로 교체한다.
-      # 또는 모델이 미리 패키징된 전용 init 이미지를 사용할 수 있다:
+      # In production, replace the URL below with internal artifact storage (S3, GCS, Harbor).
+      # Alternatively, a dedicated init image with pre-packaged models can be used:
       #   image: registry.example.com/turbolog-models:0.1.0
       #   command: ["cp", "-r", "/bundled-models/.", "/models/"]
       initContainers:
@@ -64,7 +64,7 @@ spec:
             - |
               set -e
               echo "[model-init] Downloading model files..."
-              # TODO: 실제 모델 스토리지 URL로 교체
+              # TODO: Replace with actual model storage URL
               # curl -fL "$MODEL_BASE_URL/model.onnx" -o /models/model.onnx
               # curl -fL "$MODEL_BASE_URL/tokenizer.json" -o /models/tokenizer.json
               echo "[model-init] Placeholder: models already present or mounted via PVC"
@@ -84,11 +84,11 @@ spec:
               drop: ["ALL"]
 
       # ────────────────────────────────────────────
-      # 메인 컨테이너
+      # Main container
       # ────────────────────────────────────────────
       containers:
         - name: turbolog
-          # TODO: 실제 이미지 레지스트리 경로로 교체
+          # TODO: Replace with actual image registry path
           image: registry.example.com/turbolog:0.1.0
           imagePullPolicy: Always
           ports:
@@ -96,22 +96,22 @@ spec:
               containerPort: 8087
               protocol: TCP
 
-          # 환경변수: ConfigMap에서 비밀이 아닌 설정을 주입
+          # Environment variables: Inject non-secret settings from ConfigMap
           envFrom:
             - configMapRef:
                 name: turbolog-config
           env:
-            # 인증 토큰은 Secret에서 주입 (없으면 무인증)
+            # Authentication token is injected from Secret (if absent, operates in no-auth mode)
             - name: TURBOLOG_AUTH_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: turbolog-secret
                   key: auth-token
-                  optional: true  # 토큰 없으면 무인증 모드로 동작
+                  optional: true  # Operates in no-auth mode if token is absent
 
-          # ─ 리소스 ─────────────────────────────────
-          # 임베더 2개 × ~90 MB ONNX 세션 + 인덱스/WAL/힙 = ~512 MB 기준.
-          # TURBOLOG_EMBEDDERS를 늘리면 limits.memory를 비례 조정한다.
+          # ─ Resources ──────────────────────────────
+          # Based on 2 embedders * ~90 MB ONNX session + Index/WAL/Heap = ~512 MB.
+          # If TURBOLOG_EMBEDDERS is increased, scale limits.memory proportionally.
           resources:
             requests:
               cpu: "500m"
@@ -120,9 +120,9 @@ spec:
               cpu: "2000m"
               memory: "768Mi"
 
-          # ─ 프로브 ────────────────────────────────
-          # startupProbe: 컨테이너 기동 후 최대 60초(6×10s) 대기.
-          #   모델 로드 시간이 길 수 있으므로 충분히 설정.
+          # ─ Probes ────────────────────────────────
+          # startupProbe: Waits up to 60 seconds (6x10s) after container startup.
+          #   Set sufficiently since model loading time can be long.
           startupProbe:
             httpGet:
               path: /health
@@ -131,8 +131,8 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 5
 
-          # livenessProbe: 응답 없으면 재시작.
-          #   /health → 앱이 살아있는지 확인 (deadlock, panic 감지)
+          # livenessProbe: Restarts if no response.
+          #   /health -> Checks if the app is alive (detects deadlocks, panics)
           livenessProbe:
             httpGet:
               path: /health
@@ -142,9 +142,9 @@ spec:
             timeoutSeconds: 5
             failureThreshold: 3
 
-          # readinessProbe: 트래픽 수신 가능 여부.
-          #   /ready → 인덱스 warm-up 완료 + 모델 로드 완료 시 200 반환.
-          #   아직 준비 안 됐으면 503 반환 → Service 엔드포인트에서 제외.
+          # readinessProbe: Availability to receive traffic.
+          #   /ready -> Returns 200 when index warm-up and model load are complete.
+          #   If not ready, returns 503 -> Excluded from Service endpoints.
           readinessProbe:
             httpGet:
               path: /ready
@@ -155,18 +155,18 @@ spec:
             failureThreshold: 3
             successThreshold: 1
 
-          # ─ 볼륨 마운트 ───────────────────────────
+          # ─ Volume Mounts ─────────────────────────
           volumeMounts:
             - name: data-volume
               mountPath: /data
             - name: model-volume
               mountPath: /models
               readOnly: true
-            # 임시 쓰기 영역 (readOnlyRootFilesystem=true 우회용)
+            # Temporary write area (to bypass readOnlyRootFilesystem=true)
             - name: tmp
               mountPath: /tmp
 
-          # ─ 시큐리티 컨텍스트 ────────────────────
+          # ─ Security Context ─────────────────────
           securityContext:
             runAsNonRoot: true
             runAsUser: 10001
@@ -176,47 +176,47 @@ spec:
             capabilities:
               drop: ["ALL"]
 
-          # ─ 그레이스풀 셧다운 ────────────────────
-          # SIGTERM 수신 → 앱이 마지막 swap_tick 완료 후 종료.
-          # terminationGracePeriodSeconds 내에 처리 완료를 보장한다.
+          # ─ Graceful Shutdown ────────────────────
+          # On SIGTERM -> App exits after completing the last swap_tick.
+          # Guarantees processing completion within terminationGracePeriodSeconds.
           lifecycle:
             preStop:
               exec:
-                # 신규 연결 수락 중단 후 진행 중인 요청 완료 대기
+                # Suspends accepting new connections and waits for ongoing requests to complete
                 command: ["/bin/sh", "-c", "sleep 5"]
 
       terminationGracePeriodSeconds: 30
 
       # ────────────────────────────────────────────
-      # 볼륨
+      # Volumes
       # ────────────────────────────────────────────
       volumes:
-        # WAL + 인덱스 스냅샷.
-        # emptyDir: 노드 로컬, 파드 재시작 시 초기화됨.
-        # 영속성 필요 시 아래 emptyDir 블록을 PersistentVolumeClaim으로 교체한다:
+        # WAL + Index snapshot.
+        # emptyDir: Node local, initialized upon pod restart.
+        # If persistence is needed, replace the emptyDir block below with a PersistentVolumeClaim:
         #   persistentVolumeClaim:
-        #     claimName: turbolog-data-<pod-name>  # StatefulSet 사용 시 자동 생성
+        #     claimName: turbolog-data-<pod-name>  # Automatically created when using StatefulSet
         - name: data-volume
           emptyDir:
             medium: ""
-            # sizeLimit: 20Gi  # 필요에 따라 제한
-        # 모델 파일 (initContainer가 채워 넣음)
+            # sizeLimit: 20Gi  # Limit as needed
+        # Model files (populated by initContainer)
         - name: model-volume
           emptyDir:
             medium: ""
             sizeLimit: 2Gi
-        # 임시 쓰기 공간 (/tmp)
+        # Temporary write space (/tmp)
         - name: tmp
           emptyDir:
             medium: Memory
             sizeLimit: 64Mi
 
       # ────────────────────────────────────────────
-      # Pod 분산: 같은 노드에 여러 레플리카가 몰리지 않도록
+      # Pod spread: Prevents multiple replicas from crowding on the same node
       # ────────────────────────────────────────────
       affinity:
         podAntiAffinity:
-          # preferred: 가능하면 다른 노드에, 불가능하면 같은 노드 허용
+          # preferred: Prefer different nodes, allow same node if impossible
           preferredDuringSchedulingIgnoredDuringExecution:
             - weight: 100
               podAffinityTerm:
@@ -224,13 +224,13 @@ spec:
                   matchLabels:
                     app.kubernetes.io/name: turbolog
                 topologyKey: kubernetes.io/hostname
-          # required: 가용 영역(AZ) 분산 — AZ가 2개 미만이면 required → preferred로 변경
+          # required: Availability Zone (AZ) spread — If less than 2 AZs, change required -> preferred
           requiredDuringSchedulingIgnoredDuringExecution:
             - labelSelector:
                 matchLabels:
                   app.kubernetes.io/name: turbolog
               topologyKey: topology.kubernetes.io/zone
 
-      # 서비스 어카운트 (최소 권한)
+      # Service account (Least privilege)
       serviceAccountName: turbolog
       automountServiceAccountToken: false

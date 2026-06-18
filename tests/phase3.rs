@@ -1,5 +1,5 @@
-//! Phase 3 통합 테스트: WAL 크래시 복구, 링 병합 검색, 자동 캘리브레이션, HTTP API.
-//! 모델 파일 필요 (`./scripts/download_model.sh`) — 없으면 skip.
+//! Phase 3 integration test: WAL crash recovery, ring merge search, auto-calibration, HTTP API.
+//! Model files required (`./scripts/download_model.sh`) — skip if not present.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -37,12 +37,12 @@ fn test_config(data_dir: PathBuf) -> EngineConfig {
 #[test]
 fn wal_crash_recovery() {
     let Some(models) = models_dir() else {
-        eprintln!("skip: models/ 없음");
+        eprintln!("skip: models/ not found");
         return;
     };
     let data_dir = temp_data_dir("recovery");
 
-    // 1) 인입 후 스왑 없이 종료 (크래시 시뮬레이션 — WAL에만 존재)
+    // 1) Ingest then exit without swap (crash simulation — exists only in WAL)
     {
         let engine =
             TurboLogEngine::open(test_config(data_dir.clone()), vec![make_embedder(&models)])
@@ -53,20 +53,20 @@ fn wal_crash_recovery() {
                 .unwrap();
         }
         assert_eq!(engine.stats().pending_window_len, 7);
-        // drop — swap_tick 호출 안 함
+        // drop — swap_tick not called
     }
 
-    // 2) 재기동 → WAL 재생으로 쓰기 윈도우 복원
+    // 2) Restart -> Restore write window via WAL replay
     let engine =
         TurboLogEngine::open(test_config(data_dir.clone()), vec![make_embedder(&models)]).unwrap();
-    assert_eq!(engine.stats().pending_window_len, 7, "WAL 재생 복구");
+    assert_eq!(engine.stats().pending_window_len, 7, "WAL replay recovery");
 
-    // 3) 봉인 후 검색 가능 + WAL은 로테이트되어 비어 있음
+    // 3) Searchable after sealing + WAL is rotated and empty
     assert!(engine.swap_tick().unwrap());
     let hits = engine
         .search_text("payment failed with error code", 3)
         .unwrap();
-    assert!(!hits.is_empty(), "복구된 벡터가 검색됨");
+    assert!(!hits.is_empty(), "Recovered vector is searched");
     assert_eq!(
         turbolog::Wal::replay(data_dir.join("wal-0.bin"), 384)
             .unwrap()
@@ -74,7 +74,7 @@ fn wal_crash_recovery() {
         0
     );
 
-    // 4) 세그먼트 청크 파일이 시간 디렉터리에 생성됨
+    // 4) Segment chunk files are created in time directories
     let chunk_root = data_dir.join("chunks");
     let hour_dirs: Vec<_> = std::fs::read_dir(&chunk_root).unwrap().collect();
     assert_eq!(hour_dirs.len(), 1);
@@ -84,14 +84,14 @@ fn wal_crash_recovery() {
 #[test]
 fn ring_merges_multiple_windows() {
     let Some(models) = models_dir() else {
-        eprintln!("skip: models/ 없음");
+        eprintln!("skip: models/ not found");
         return;
     };
     let data_dir = temp_data_dir("ring");
     let engine =
         TurboLogEngine::open(test_config(data_dir.clone()), vec![make_embedder(&models)]).unwrap();
 
-    // 윈도우 1: 디스크 경고 / 윈도우 2: 네트워크 타임아웃
+    // Window 1: Disk warning / Window 2: Network timeout
     let disk = engine
         .ingest_log("disk usage at 95 percent on /var")
         .unwrap();
@@ -100,28 +100,28 @@ fn ring_merges_multiple_windows() {
         .ingest_log("network timeout connecting to upstream 10.0.0.9")
         .unwrap();
     assert!(engine.swap_tick().unwrap());
-    assert!(!engine.swap_tick().unwrap(), "빈 윈도우는 스왑 스킵");
+    assert!(!engine.swap_tick().unwrap(), "Skip swap for empty window");
 
     let stats = engine.stats();
     assert_eq!(stats.ring_windows, 2);
     assert_eq!(stats.ring_vectors, 2);
 
-    // 두 윈도우의 내용이 모두 한 번의 검색으로 나옴
+    // Contents of both windows are returned in a single search
     let hits = engine
         .search_text("disk space almost full warning", 2)
         .unwrap();
-    assert_eq!(hits.first().map(|h| h.id), Some(disk.id), "윈도우 1 최상위");
+    assert_eq!(hits.first().map(|h| h.id), Some(disk.id), "Window 1 top");
     let hits = engine
         .search_text("connection timeout to remote host", 2)
         .unwrap();
-    assert_eq!(hits.first().map(|h| h.id), Some(net.id), "윈도우 2 최상위");
+    assert_eq!(hits.first().map(|h| h.id), Some(net.id), "Window 2 top");
     std::fs::remove_dir_all(&data_dir).ok();
 }
 
 #[test]
 fn auto_calibration_then_detection() {
     let Some(models) = models_dir() else {
-        eprintln!("skip: models/ 없음");
+        eprintln!("skip: models/ not found");
         return;
     };
     let data_dir = temp_data_dir("calib");
@@ -129,7 +129,7 @@ fn auto_calibration_then_detection() {
         TurboLogEngine::open(test_config(data_dir.clone()), vec![make_embedder(&models)]).unwrap();
 
     assert!(!engine.stats().detector_calibrated);
-    // 정상 템플릿 5종 → calibration_templates=5 도달 시 자동 동결
+    // 5 normal templates -> Auto-freeze when calibration_templates=5 is reached
     for i in 0..20 {
         engine
             .ingest_log(&format!("connection accepted from 10.0.0.{i} port 5432"))
@@ -147,20 +147,20 @@ fn auto_calibration_then_detection() {
             .ingest_log(&format!("worker {i} heartbeat ok at epoch {i}"))
             .unwrap();
     }
-    assert!(engine.stats().detector_calibrated, "자동 캘리브레이션 완료");
+    assert!(engine.stats().detector_calibrated, "Auto-calibration complete");
     engine.swap_tick().unwrap();
 
-    // 정상 로그 → anomaly 없음
+    // Normal log -> no anomaly
     let normal = engine
         .ingest_log("disk usage at 42 percent on /var")
         .unwrap();
     assert!(normal.anomaly.is_none());
 
-    // 치명적 신규 패턴 → anomaly + 최근 윈도우 유사 맥락
+    // Fatal new pattern -> anomaly + recent window similar context
     let fatal = engine
         .ingest_log("FATAL kernel panic at address 0xdeadbeef, halting node")
         .unwrap();
-    let report = fatal.anomaly.expect("이상 탐지되어야 함");
+    let report = fatal.anomaly.expect("Anomaly should be detected");
     assert!(report.score > 0.5);
     assert!(!report.nearest_incidents.is_empty());
     std::fs::remove_dir_all(&data_dir).ok();
@@ -169,7 +169,7 @@ fn auto_calibration_then_detection() {
 #[test]
 fn http_api_end_to_end() {
     let Some(models) = models_dir() else {
-        eprintln!("skip: models/ 없음");
+        eprintln!("skip: models/ not found");
         return;
     };
     let data_dir = temp_data_dir("http");
@@ -191,10 +191,10 @@ fn http_api_end_to_end() {
     assert_eq!(results.len(), 2);
     assert_eq!(
         results[0]["template_id"], results[1]["template_id"],
-        "같은 템플릿"
+        "Same template"
     );
 
-    // 봉인 후 POST /search
+    // POST /search after sealing
     engine.swap_tick().unwrap();
     let resp: serde_json::Value = ureq::post(&format!("{base}/search"))
         .send_json(serde_json::json!({"query": "disk space warning", "k": 2}))
@@ -212,23 +212,23 @@ fn http_api_end_to_end() {
     assert_eq!(resp["ingested_total"], 2);
     assert_eq!(resp["ring_windows"], 1);
 
-    // 잘못된 요청 → 400
+    // Bad request -> 400
     let err = ureq::post(&format!("{base}/search"))
         .send_json(serde_json::json!({"k": 2}))
         .unwrap_err();
     match err {
         ureq::Error::Status(code, _) => assert_eq!(code, 400),
-        other => panic!("400 응답이어야 함: {other}"),
+        other => panic!("Should be 400 response: {other}"),
     }
     std::fs::remove_dir_all(&data_dir).ok();
 }
 
 #[test]
 fn sealed_wal_leftover_recovery() {
-    // 크래시 시나리오: 봉인(WAL detach) 직후, 세그먼트 백업 완료 전에 프로세스 사망.
-    // 잔여 wal-sealed-*.bin이 재기동 시 재생·통합되어야 한다.
+    // Crash scenario: Process dies immediately after sealing (WAL detach), before segment backup completes.
+    // Remaining wal-sealed-*.bin should be replayed and merged on restart.
     let Some(models) = models_dir() else {
-        eprintln!("skip: models/ 없음");
+        eprintln!("skip: models/ not found");
         return;
     };
     let data_dir = temp_data_dir("sealed_leftover");
@@ -241,9 +241,9 @@ fn sealed_wal_leftover_recovery() {
                 .ingest_log(&format!("replica lag {i} ms on shard primary"))
                 .unwrap();
         }
-        // drop — 스왑 없이 종료
+        // drop — exit without swap
     }
-    // 봉인 직후 크래시 흉내: 활성 WAL을 sealed 파일로 rename만 해 둔다
+    // Simulate crash immediately after sealing: just rename active WAL to sealed file
     std::fs::rename(
         data_dir.join("wal-0.bin"),
         data_dir.join("wal-0-sealed-99.bin"),
@@ -252,8 +252,8 @@ fn sealed_wal_leftover_recovery() {
 
     let engine =
         TurboLogEngine::open(test_config(data_dir.clone()), vec![make_embedder(&models)]).unwrap();
-    assert_eq!(engine.stats().pending_window_len, 4, "sealed 잔여물 복구");
-    // 통합 후: 잔여 파일은 사라지고 활성 WAL에 4건이 재영속화됨
+    assert_eq!(engine.stats().pending_window_len, 4, "sealed leftover recovery");
+    // After merge: Leftover file disappears and 4 records are re-persisted to active WAL
     assert!(!data_dir.join("wal-0-sealed-99.bin").exists());
     assert_eq!(
         turbolog::Wal::replay(data_dir.join("wal-0.bin"), 384)
@@ -267,7 +267,7 @@ fn sealed_wal_leftover_recovery() {
 #[test]
 fn http_auth_and_body_limit() {
     let Some(models) = models_dir() else {
-        eprintln!("skip: models/ 없음");
+        eprintln!("skip: models/ not found");
         return;
     };
     let data_dir = temp_data_dir("http_auth");
@@ -283,29 +283,29 @@ fn http_auth_and_body_limit() {
     .unwrap();
     let base = format!("http://{addr}");
 
-    // 토큰 없음 → 401
+    // No token -> 401
     let err = ureq::get(&format!("{base}/stats")).call().unwrap_err();
     match err {
         ureq::Error::Status(code, _) => assert_eq!(code, 401),
-        other => panic!("401이어야 함: {other}"),
+        other => panic!("Should be 401: {other}"),
     }
-    // 잘못된 토큰 → 401
+    // Invalid token -> 401
     let err = ureq::get(&format!("{base}/stats"))
         .set("Authorization", "Bearer wrong")
         .call()
         .unwrap_err();
     match err {
         ureq::Error::Status(code, _) => assert_eq!(code, 401),
-        other => panic!("401이어야 함: {other}"),
+        other => panic!("Should be 401: {other}"),
     }
-    // 올바른 토큰 → 200
+    // Valid token -> 200
     let resp = ureq::get(&format!("{base}/stats"))
         .set("Authorization", "Bearer secret-token")
         .call()
         .unwrap();
     assert_eq!(resp.status(), 200);
 
-    // 본문 한도 초과(1MiB+) → 413
+    // Body limit exceeded (1MiB+) -> 413
     let huge = "x".repeat(1024 * 1024 + 100);
     let err = ureq::post(&format!("{base}/logs"))
         .set("Authorization", "Bearer secret-token")
@@ -313,7 +313,7 @@ fn http_auth_and_body_limit() {
         .unwrap_err();
     match err {
         ureq::Error::Status(code, _) => assert_eq!(code, 413),
-        other => panic!("413이어야 함: {other}"),
+        other => panic!("Should be 413: {other}"),
     }
     std::fs::remove_dir_all(&data_dir).ok();
 }

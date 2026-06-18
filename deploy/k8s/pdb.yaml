@@ -1,14 +1,14 @@
 ---
 # TurboLog PodDisruptionBudget
 #
-# 롤링 업데이트, 노드 드레인, 클러스터 업그레이드 중에
-# 최소 4개의 레플리카가 항상 서비스 가능 상태를 유지하도록 보장한다.
+# Ensures that at least 4 replicas are always available during
+# rolling updates, node drains, or cluster upgrades.
 #
-# min 6 레플리카 기준:
-#   minAvailable: 4 → 최대 2개 동시 중단 허용
-#   Deployment rollingUpdate.maxUnavailable: 2 와 일치시킨다.
+# Based on a minimum of 6 replicas:
+#   minAvailable: 4 -> Allows up to 2 concurrent disruptions.
+#   Matches Deployment rollingUpdate.maxUnavailable: 2.
 #
-# AZ 3개 운영 시: 4개 가용 = AZ당 최소 1개 이상 + 여유 1개 확보.
+# When operating in 3 AZs: 4 available = at least 1 per AZ + 1 spare.
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:

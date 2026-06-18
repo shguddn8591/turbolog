@@ -1,52 +1,52 @@
 # Lessons
 
 ## 2026-06-10 Phase 2
-- **핑퐁 윈도우 의미론 확정**: 스펙은 스왑 후 쓰기 인덱스의 기존 데이터 처리를 정의하지 않음.
-  봉인(seal) 후 빈 인덱스로 교체하는 설계를 채택 — 검색 스냅샷 = 직전 봉인 윈도우(10초).
-  이력 검색은 Phase 3 시간 청크(.tvim) 파일 담당. (대안인 클론/이중쓰기/재구축은 비용 또는
-  turbovec Clone 미구현으로 불가)
-- **turbovec `search_with_allowlist`는 빈 목록·미존재 ID에 panic** —
-  Tier 2에서 `contains()`로 사전 필터링 필수 (detect.rs `tier2_context`).
-- **`prepare()`를 발행 전에 호출**: 회전 행렬/SIMD 레이아웃 초기화 비용을 스왑 스레드가
-  지불하게 해서 첫 검색자의 레이턴시 스파이크 방지.
-- 스펙의 `AtomicPtr<*mut>` 핑퐁은 스왑 중 읽기 참조 use-after-free → `ArcSwap` 스냅샷 +
-  쓰기 전용 Mutex(검색 경로 비접촉)로 교정. 계획 단계에서 승인됨.
+- **Ping-pong window semantics finalized**: The specification does not define the handling of existing data in the write index after a swap.
+  Adopted a design of replacing with an empty index after sealing — search snapshot = previously sealed window (10 seconds).
+  Historical search is handled by Phase 3 time chunk (.tvim) files. (Alternatives like clone/double-write/rebuild are impossible due to cost or
+  `turbovec` Clone not being implemented)
+- **`turbovec` `search_with_allowlist` panics on empty list/non-existent IDs** —
+  Pre-filtering with `contains()` in Tier 2 is mandatory (detect.rs `tier2_context`).
+- **Call `prepare()` before publishing**: Made the swap thread pay the initialization cost of rotation matrix/SIMD layout
+  to prevent latency spikes for the first searcher.
+- The specification's `AtomicPtr<*mut>` ping-pong causes use-after-free on read references during swap → Corrected to `ArcSwap` snapshot +
+  write-only Mutex (untouched by the search path). Approved during the planning phase.
 
 ## 2026-06-10 Phase 3
-- **쓰기 경로 직렬화 지점 = WAL Mutex**: WAL append + indexer ingest, 그리고 스왑(봉인+rotate)을
-  같은 락 아래 묶지 않으면 "봉인 직후 rotate가 새 윈도우의 WAL 레코드를 지우는" 유실 레이스 발생.
-  engine.rs 모듈 doc에 불변식으로 명문화.
-- **turbovec 점수 = 내적 유사도(클수록 가까움)**: 문서에 명시가 없어 실증으로 확인
-  (동일≈1.0, 직교≈0, 반대≈-1.0). 링 병합 검색은 내림차순 정렬.
-- **빈 윈도우 스왑 스킵**: 유휴 시 스왑하면 검색 스냅샷이 빈 인덱스로 교체되고 세그먼트
-  파일이 스팸됨 — pending==0이면 no-op.
-- **검색 깊이 = 링(최근 봉인 윈도우 N개) 병합**: turbovec에 merge가 없어 윈도우 단위 검색 후
-  점수 병합. 링 범위를 넘는 이력은 디스크 세그먼트 로드가 필요(향후 과제).
+- **Write path serialization point = WAL Mutex**: WAL append + indexer ingest, and swap (seal+rotate)
+  must be grouped under the same lock, otherwise a loss race occurs where "rotate immediately after seal deletes WAL records of the new window".
+  Documented as an invariant in engine.rs module doc.
+- **turbovec score = dot product similarity (larger is closer)**: Not specified in documentation, confirmed empirically
+  (identical≈1.0, orthogonal≈0, opposite≈-1.0). Ring merge search is sorted in descending order.
+- **Skip swapping empty windows**: Swapping when idle replaces the search snapshot with an empty index and spams segment
+  files — no-op if pending==0.
+- **Search depth = merging ring (recent N sealed windows)**: `turbovec` lacks merge, so search per window then
+  merge scores. Historical data beyond the ring range requires loading disk segments (future work).
 
-## 2026-06-10 성능 수정 ([중간 1]·[중간 2])
-- **WAL truncate(rotate) → rename(detach_sealed) 전환 이유**: 락 밖에서 세그먼트를 쓰려면
-  "봉인 후 rotate 전에 들어온 새 append 유실" 레이스를 피해야 함. rename은 메타데이터 연산이라
-  락 안에서 안전하고, sealed 파일은 세그먼트 안착 후에만 삭제 → 크래시 내구성 유지.
-  재기동 복구는 잔여 sealed + 활성 WAL을 id 중복 제거 후 단일 WAL로 통합(원자적 rename).
-- **임베더 풀 분리의 핵심은 병렬화가 아니라 비차단**: 풀 1개여도 적중 경로가 추론에
-  블록되지 않는 것이 본질 (미스 폭풍 중 적중 경로 136 → 59k logs/s).
-  동일 템플릿 동시 미스 시 중복 임베딩 가능 — 결과 동일하므로 의도적 허용.
-- 부하 테스트 [2]의 max ~86ms 스파이크는 스왑과 무관 (해당 구간 스왑 없음) —
-  WAL 파일 성장 중 OS 쓰기 스톨로 추정, 50k 중 1건·p99 26µs라 수용.
+## 2026-06-10 Performance Fix ([Mid 1]·[Mid 2])
+- **Reason for switching WAL truncate(rotate) → rename(detach_sealed)**: To write segments outside the lock,
+  we must avoid the loss race of "new appends coming in after seal but before rotate". rename is a metadata operation so
+  it is safe inside the lock, and the sealed file is deleted only after the segment is settled → maintains crash durability.
+  Restart recovery merges the remaining sealed + active WAL into a single WAL after id deduplication (atomic rename).
+- **The key to embedder pool separation is non-blocking, not parallelization**: Even with 1 pool, the essence is that the hit path
+  is not blocked by inference (hit path 136 → 59k logs/s during a miss storm).
+  Simultaneous misses on the same template may cause duplicate embeddings — results are identical, so intentionally allowed.
+- The max ~86ms spike in load test [2] is unrelated to swapping (no swap in that interval) —
+  Presumed to be an OS write stall during WAL file growth, 1 in 50k · p99 26µs so acceptable.
 
-## 2026-06-15 Phase 4 프로덕션 하드닝 (100만 동시접속)
-- **단일 글로벌 쓰기 락이 진짜 처리량 병목**: 멀티스레드 인입이 10스레드에서 0.86x로
-  *역확장*(락 경합)함을 loadtest [7]로 정량 입증 후 샤딩 정당화. 측정 없이 "빠르다"고
-  가정하지 말 것. → 샤드별 독립 WAL+인덱스+ring, `id % N` 라우팅으로 제거.
-- **샤딩의 경계 설정**: WAL/인덱스/ring만 샤딩하고 템플릿 캐시·임베더 풀·detector·
-  calibration은 글로벌 유지. 상태 공유가 필요한 부분(캐시 적중률, 동결 centroid)까지
-  샤딩하면 정합성·메모리 비용만 늘고 이득 없음.
-- **공유 계약 선동결 → 병렬 구현**: metrics 모듈 시그니처를 먼저 고정(내가 직접)한 뒤
-  4개 워크스트림을 파일 소유권 비중첩으로 분리해 병렬 실행. 교차 파일(detect.rs clippy
-  수정)이 동일 변경이면 3-way 머지가 자동 해소되므로 중복 허용이 더 단순.
-- **스택 PR**: 샤딩·HTTP는 metrics 계약(foundation) 위에 스택, 배포·벤치는 main 독립.
-  foundation 머지 시 GitHub가 스택 PR base를 자동 재타겟.
-- **100만 = 단일노드 최적화 × 수평확장**: 노드는 인메모리 인덱스라 상태풀 → 테넌트 키
-  일관해시 LB로 노드 고정 + 노드내 코어 샤딩. 보수 30k logs/s/node 기준 1M → ~44 레플리카.
-- **TLS는 인그레스 종단**: 앱은 평문 유지(신뢰 네트워크 내부). 인프로세스 TLS는 운영
-  복잡도만 늘림. 관측성 프로브(/health·/ready·/metrics)는 인증 면제.
+## 2026-06-15 Phase 4 Production Hardening (1 Million Concurrent Connections)
+- **A single global write lock is the real throughput bottleneck**: Quantitatively proven with loadtest [7] that multi-thread ingestion
+  *anti-scales* (lock contention) from 10 threads to 0.86x, justifying sharding. Do not assume it is "fast"
+  without measurement. → Eliminated by independent WAL+index+ring per shard, routing with `id % N`.
+- **Setting shard boundaries**: Only WAL/index/ring are sharded; template cache, embedder pool, detector,
+  and calibration are kept global. Sharding state-sharing parts (cache hit rate, frozen centroid)
+  only increases consistency and memory costs without benefits.
+- **Freeze shared contracts first → parallel implementation**: Fix the metrics module signature first (by myself), then
+  separate the 4 workstreams into non-overlapping file ownerships for parallel execution. If cross-files (detect.rs clippy
+  fixes) are identical changes, 3-way merge resolves automatically, making duplicate allowance simpler.
+- **Stacked PRs**: Sharding and HTTP are stacked on top of the metrics contract (foundation), while deployment and benchmarks are independent from main.
+  When foundation merges, GitHub automatically retargets the stack PR base.
+- **1 Million = single-node optimization × horizontal scaling**: Nodes are stateful due to in-memory index → node pinning with
+  tenant key consistent hash LB + intra-node core sharding. Based on a conservative 30k logs/s/node, 1M → ~44 replicas.
+- **TLS is terminated at ingress**: The app remains plaintext (inside the trusted network). In-process TLS only increases
+  operational complexity. Observability probes (/health, /ready, /metrics) are exempt from authentication.

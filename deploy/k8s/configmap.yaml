@@ -1,6 +1,6 @@
 ---
-# TurboLog ConfigMap — 비밀이 아닌 런타임 설정
-# 민감 값(TURBOLOG_AUTH_TOKEN)은 별도 Secret으로 관리한다.
+# TurboLog ConfigMap — Non-secret runtime configuration
+# Sensitive values (TURBOLOG_AUTH_TOKEN) are managed in a separate Secret.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -10,20 +10,20 @@ metadata:
     app.kubernetes.io/name: turbolog
     app.kubernetes.io/component: config
 data:
-  # HTTP 리슨 포트
+  # HTTP listen port
   TURBOLOG_PORT: "8087"
 
-  # ONNX 임베딩 워커 수.
-  # 각 임베더가 onnxruntime 세션 ~90 MB를 점유한다.
-  # 임베더 2개 → 세션 메모리 ~180 MB + 인덱스/WAL 오버헤드.
+  # Number of ONNX embedding workers.
+  # Each embedder occupies ~90 MB of onnxruntime session memory.
+  # 2 embedders → ~180 MB session memory + index/WAL overhead.
   TURBOLOG_EMBEDDERS: "2"
 
-  # WAL 및 .tvim 인덱스 파일 저장 경로 (PVC 또는 emptyDir 마운트)
+  # WAL and .tvim index file storage path (PVC or emptyDir mount)
   TURBOLOG_DATA_DIR: "/data"
 
-  # model.onnx / tokenizer.json 경로 (initContainer가 채워 넣는 emptyDir)
+  # model.onnx / tokenizer.json path (emptyDir populated by initContainer)
   TURBOLOG_MODEL_DIR: "/models"
 
-  # 최대 동시 인-플라이트 요청 수 (백프레셔 임계치).
-  # 초과 시 503 반환. 0 또는 미설정이면 무제한.
+  # Maximum concurrent in-flight requests (backpressure threshold).
+  # Returns 503 when exceeded. 0 or unset means unlimited.
   TURBOLOG_MAX_INFLIGHT: "1000"

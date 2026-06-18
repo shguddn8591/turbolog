@@ -1,94 +1,94 @@
-# TurboLog — Phase 4: 프로덕션 하드닝 (100만 동시접속)
+# TurboLog — Phase 4: Production Hardening (1M Concurrent Connections)
 
-> 목표: 100만 동시접속 서비스에서 적극 사용 가능한 프로덕션 레벨.
-> 전략: 공유 계약(metrics API) 동결 → 파일 소유권 비중첩 4개 워크스트림 병렬(sonnet) → 통합 검증.
+> Goal: Production-level readiness for active use in a 1M concurrent connection service.
+> Strategy: Freeze shared contracts (metrics API) → Parallelize 4 workstreams with non-overlapping file ownership (sonnet) → Integration and validation.
 
-## 진단 (병목 우선순위)
-- **P0 처리량**: `wal: Mutex<Wal>` 단일 글로벌 쓰기 락이 모든 인입 직렬화 → 샤딩.
-- **P0 관측성**: Prometheus/health/ready 부재 → 운영 불가.
-- **P1 회복성**: 백프레셔/타임아웃/그레이스풀 셧다운 부재.
-- **P1 배포**: Docker/k8s/HPA 부재 (100만 = N 레플리카 수평확장).
-- **P2 검증**: criterion 벤치·SLO 문서 부재.
+## Diagnostics (Bottleneck Priority)
+- **P0 Throughput**: `wal: Mutex<Wal>` single global write lock serializes all ingestion → Sharding.
+- **P0 Observability**: Missing Prometheus/health/ready → Cannot operate.
+- **P1 Resilience**: Missing backpressure/timeout/graceful shutdown.
+- **P1 Deployment**: Missing Docker/k8s/HPA (1M = N replicas horizontal scaling).
+- **P2 Validation**: Missing criterion bench and SLO documentation.
 
-## 계약 동결 (선행, 내가 직접)
-- [ ] `src/metrics.rs` — 프로세스 전역 Prometheus 텍스트 노출(의존성 0). 모든 에이전트가 호출.
+## Contract Freeze (Prerequisite, I will do this)
+- [ ] `src/metrics.rs` — Process-global Prometheus text exposition (0 dependencies). Called by all agents.
 - [ ] `Cargo.toml` — signal-hook, criterion(dev)+`[[bench]]`, `[profile.release]` lto.
-- [ ] `src/lib.rs` — `pub mod metrics;` 선언.
+- [ ] `src/lib.rs` — `pub mod metrics;` declaration.
 
-## WS1 — 샤딩 인입 엔진 (engine.rs, index.rs, wal.rs)
-- [ ] N 샤드: 샤드별 `Wal` + `PingPongIndexer` (글로벌 락 제거)
-- [ ] 샤드별 swap_tick / 멀티샤드 크래시 복구 / 검색 N샤드×링 병합
-- [ ] 공개 API(open/ingest_log/search_text/swap_tick/sweep_chunks/stats) 불변
-- [ ] 메트릭 계측: ingest count/latency, anomaly
-- [ ] 기존 19 테스트 전부 녹색 유지
+## WS1 — Sharded Ingestion Engine (engine.rs, index.rs, wal.rs)
+- [ ] N Shards: Per-shard `Wal` + `PingPongIndexer` (Remove global lock)
+- [ ] Per-shard swap_tick / Multi-shard crash recovery / Search N-shards x ring merge
+- [ ] Public API (open/ingest_log/search_text/swap_tick/sweep_chunks/stats) remains unchanged
+- [ ] Metrics instrumentation: ingest count/latency, anomaly
+- [ ] Keep all existing 19 tests green
 
-## WS3 — HTTP 엣지 회복성 (http.rs)
+## WS3 — HTTP Edge Resilience (http.rs)
 - [ ] `/health`(liveness), `/ready`(readiness), `/metrics`(Prometheus)
-- [ ] 인플라이트 백프레셔(초과 시 503) + 요청 본문 read 타임아웃
-- [ ] `ServerConfig` 도입(addr/workers/auth/max_inflight/shutdown)
-- [ ] 요청 메트릭 계측(2xx/4xx/5xx/rejected/inflight)
+- [ ] Inflight backpressure (503 when exceeded) + Request body read timeout
+- [ ] Introduce `ServerConfig` (addr/workers/auth/max_inflight/shutdown)
+- [ ] Request metrics instrumentation (2xx/4xx/5xx/rejected/inflight)
 
-## WS4 — 배포·운영 (신규 파일만)
-- [ ] 멀티스테이지 `Dockerfile`(non-root, distroless/slim) + `.dockerignore`
+## WS4 — Deployment & Operations (New files only)
+- [x] Multi-stage `Dockerfile` (non-root, distroless/slim) + `.dockerignore` (Translated Korean comments to English)
 - [ ] `deploy/k8s/`: Deployment/Service/HPA/PDB/ConfigMap (probe→/ready,/health)
-- [ ] `deploy/docker-compose.yml` + `docs/OPERATIONS.md`(100만 수평확장 토폴로지·TLS@ingress)
+- [ ] `deploy/docker-compose.yml` + `docs/OPERATIONS.md` (1M horizontal scaling topology, TLS@ingress)
 
-## WS5 — 벤치마크·SLO (신규 파일 위주)
-- [ ] `benches/throughput.rs` criterion (모델 비의존: parse/cache/detect/fnv)
-- [ ] `examples/loadtest.rs` 멀티스레드 경합 인입 측정 추가
-- [ ] `docs/SLO.md`: 지연/처리량 목표 + 측정 결과
+## WS5 — Benchmark & SLO (Mainly new files)
+- [ ] `benches/throughput.rs` criterion (Model-independent: parse/cache/detect/fnv)
+- [ ] `examples/loadtest.rs` Add multi-thread contention ingestion measurement
+- [ ] `docs/SLO.md`: Latency/throughput goals + Measurement results
 
-## 통합·검증 (선행 의존, 내가 직접)
-- [ ] run_server 콜사이트(main.rs/loadtest) 정합 + SIGTERM 그레이스풀 셧다운
-- [ ] `cargo build/test/clippy` 녹색 + loadtest 실증
-- [ ] tasks/lessons.md 갱신
+## Integration & Validation (Depends on prerequisites, I will do this)
+- [ ] Align run_server call sites (main.rs/loadtest) + SIGTERM graceful shutdown
+- [ ] `cargo build/test/clippy` green + loadtest demonstration
+- [ ] Update tasks/lessons.md
 
 ---
 
-# TurboLog — Phase 1 체크리스트
+# TurboLog — Phase 1 Checklist
 
-## 스캐폴드
-- [x] 디렉터리 구조 + git init
-- [x] Cargo.toml 의존성 (turbovec, drain-rs, lru, ort, tokenizers, arc-swap, anyhow)
+## Scaffold
+- [x] Directory structure + git init
+- [x] Cargo.toml dependencies (turbovec, drain-rs, lru, ort, tokenizers, arc-swap, anyhow)
 - [x] .gitignore (/target, /models)
 - [x] scripts/download_model.sh (all-MiniLM-L6-v2 ONNX + tokenizer.json)
 
 ## Phase 1: Core Bindings & Cache (src/ingest.rs)
-- [x] ParsedLog 구조체
-- [x] TemplateParser (drain-rs 래퍼, template_id = FNV-1a 템플릿 해시)
+- [x] ParsedLog struct
+- [x] TemplateParser (drain-rs wrapper, template_id = FNV-1a template hash)
 - [x] Embedder (ort Session + tokenizers, mean pooling + L2 norm)
-- [x] VectorCache (LruCache<u64, Arc<[f32]>>, 용량 10,000, hit/miss 카운터)
+- [x] VectorCache (LruCache<u64, Arc<[f32]>>, capacity 10,000, hit/miss counters)
 
-## 골격 (구현 없음, 타입만)
-- [x] detect.rs — DetectionResult, AnomalyDetector (IdMapIndex로 교정)
-- [x] index.rs — PingPongIndexer (arc-swap으로 교정)
-- [x] lib.rs 모듈 연결
+## Skeleton (No implementation, types only)
+- [x] detect.rs — DetectionResult, AnomalyDetector (Calibrated with IdMapIndex)
+- [x] index.rs — PingPongIndexer (Calibrated with arc-swap)
+- [x] lib.rs module connections
 
-## 검증
-- [x] 단위 테스트: 템플릿 ID 안정성, 캐시 hit/miss — 3개 통과
-- [x] 통합 테스트: 합성 로그 100건 → 384차원 L2≈1.0, 히트율 95.0% (hits=95, misses=5)
-- [x] cargo build 경고 없음 + cargo test 전체 통과 (5/5)
-- [x] README.md + 첫 커밋
-- [x] GitHub Actions 고급 CI 파이프라인 구축 (Lint, 매트릭스 OS 테스트, Security Audit, Code Coverage)
+## Validation
+- [x] Unit tests: Template ID stability, Cache hit/miss — 3 passed
+- [x] Integration tests: 100 synthetic logs → 384-dimensional L2≈1.0, hit rate 95.0% (hits=95, misses=5)
+- [x] cargo build no warnings + cargo test all passed (5/5)
+- [x] README.md + initial commit
+- [x] Establish GitHub Actions advanced CI pipeline (Lint, Matrix OS tests, Security Audit, Code Coverage)
 
 ## Phase 2: Ping-Pong & Centroid
-- [x] PingPongIndexer 구현 (쓰기 Mutex + ArcSwap 스냅샷 읽기, swap_and_flush)
-- [x] 봉인 윈도우 .tvim 청크 백업 (flush_path) + load 라운드트립 검증
-- [x] AnomalyDetector Tier 1 (고정 centroid 유클리드 거리, fit = 1회 K-means 후 동결)
-- [x] Tier 2 IdMapIndex 심층 검색 + allowlist 필터 (panic 가드 포함)
-- [x] 동시성 테스트 (ingest/search/swap 3-스레드) + E2E 로그 이상 탐지 테스트
-- [x] 테스트 12/12 통과
+- [x] Implement PingPongIndexer (Write Mutex + ArcSwap snapshot read, swap_and_flush)
+- [x] Backup sealed window .tvim chunks (flush_path) + load round-trip validation
+- [x] AnomalyDetector Tier 1 (Fixed centroid Euclidean distance, fit = frozen after 1 K-means)
+- [x] Tier 2 IdMapIndex deep search + allowlist filter (includes panic guard)
+- [x] Concurrency testing (ingest/search/swap 3-threads) + E2E log anomaly detection test
+- [x] 12/12 tests passed
 
 ## Phase 3: Persistence & API
-- [x] WAL 장애 복구 (wal.rs — append/rotate/replay, 불완전 꼬리 무시, 크래시 복구 테스트)
-- [x] 시간 청크 관리 (chunks.rs — hour-N 디렉터리, 만료 시 OS unlink sweep)
-- [x] 엔진 조립 (engine.rs — WAL→인덱싱 직렬화, 링 병합 검색, 자동 캘리브레이션 후 동결)
-- [x] HTTP API (http.rs — POST /logs, POST /search, GET /stats, tiny_http 워커 풀)
-- [x] 서버 데몬 (main.rs — 10초 스왑 틱 + 1시간 sweep, env 설정)
-- [x] 테스트 19/19 통과 + 릴리스 바이너리 스모크 런 (스왑 데몬·검색·청크·WAL 로테이트 실증)
+- [x] WAL disaster recovery (wal.rs — append/rotate/replay, ignore incomplete tails, crash recovery test)
+- [x] Time chunk management (chunks.rs — hour-N directory, OS unlink sweep upon expiration)
+- [x] Engine assembly (engine.rs — WAL→Indexing serialization, ring merge search, freeze after auto-calibration)
+- [x] HTTP API (http.rs — POST /logs, POST /search, GET /stats, tiny_http worker pool)
+- [x] Server daemon (main.rs — 10-second swap tick + 1-hour sweep, env config)
+- [x] 19/19 tests passed + release binary smoke run (swap daemon, search, chunks, WAL rotate demonstration)
 
-## 향후 (스펙 외 개선 후보)
-- [ ] gRPC 인터페이스 (스펙 병기 항목 — 필요 시 동일 엔진 위에 추가)
-- [ ] 디스크 세그먼트 대상 이력 검색 (링 범위 초과 시간대)
-- [x] 임베더 풀 분리 (§4.3 1단계 — 프로세스 내 풀, TURBOLOG_EMBEDDERS)
-- [ ] Stateless Embedder 횡적 확장 (§4.3 완전체 — 워커 프로세스 분리 배포)
+## Future (Improvement candidates outside of spec)
+- [ ] gRPC interface (Spec parallel item — added on top of the same engine if needed)
+- [ ] History search targeting disk segments (Timeframes exceeding ring scope)
+- [x] Separate embedder pool (§4.3 Phase 1 — In-process pool, TURBOLOG_EMBEDDERS)
+- [ ] Stateless Embedder horizontal scaling (§4.3 Final Form — Worker process separate deployment)
