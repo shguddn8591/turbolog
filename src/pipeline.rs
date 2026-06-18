@@ -30,15 +30,19 @@ pub struct LocalPipeline {
     calibration_buf: Vec<f32>,
     /// Number of distinct templates seen so far (caps at CALIBRATION_TEMPLATES).
     calibration_count: usize,
+    threshold_override: Option<f32>,
+    seen_templates: std::collections::HashSet<u64>,
 }
 
 impl LocalPipeline {
-    pub fn new(embedder: Embedder) -> Self {
+    pub fn new(embedder: Embedder, threshold_override: Option<f32>) -> Self {
         Self {
             cache: VectorCache::new(embedder),
             detector: None,
             calibration_buf: Vec::new(),
             calibration_count: 0,
+            threshold_override,
+            seen_templates: std::collections::HashSet::new(),
         }
     }
 
@@ -49,9 +53,11 @@ impl LocalPipeline {
 
         // Calibration phase: accumulate novel template vectors.
         if self.detector.is_none() {
-            if self.calibration_count < CALIBRATION_TEMPLATES {
-                self.calibration_buf.extend_from_slice(&vector);
-                self.calibration_count += 1;
+            if self.seen_templates.insert(parsed.template.clone()) {
+                if self.calibration_count < CALIBRATION_TEMPLATES {
+                    self.calibration_buf.extend_from_slice(&vector);
+                    self.calibration_count += 1;
+                }
             }
             if self.calibration_count >= CALIBRATION_TEMPLATES {
                 let k = CENTROID_K.min(self.calibration_count);
@@ -71,7 +77,10 @@ impl LocalPipeline {
 
         let detector = self.detector.as_ref().unwrap();
         let score = detector.min_distance(&vector);
-        let is_anomaly = score > detector.threshold();
+        let threshold = self
+            .threshold_override
+            .unwrap_or_else(|| detector.threshold());
+        let is_anomaly = score > threshold;
 
         Ok(LineResult {
             template: parsed.template,
