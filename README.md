@@ -58,8 +58,11 @@ No log file? Paste this to try it immediately:
 
 ```bash
 printf 'user login OK\nrequest processed in 12ms\nOOM killer activated for pid 4821\ndisk usage at 99%%\nuser login OK\nrequest processed in 8ms\n' \
-  | turbolog watch
+  | turbolog scan
 ```
+
+> `scan` reads to EOF and calibrates on whatever it saw, so it works on small inputs.
+> `watch` is for live streams (`tail -f`) and calibrates as templates accumulate.
 
 With your own logs:
 
