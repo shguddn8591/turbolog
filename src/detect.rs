@@ -163,9 +163,10 @@ impl AnomalyDetector {
     /// Used both for filtering and threshold calibration (e.g. p99 of normal distance).
     pub fn min_distance(&self, vector: &[f32]) -> f32 {
         // euclidean_sq zips, so a wrong-length vector would silently score over a prefix
-        // rather than erroring. Always upheld by construction (single 384-d embedder), so
-        // a debug-only check keeps the per-line hot path free in release.
-        debug_assert_eq!(
+        // and could be misclassified as normal. The check is one length compare against a
+        // k×384-float scan — negligible — so reject the mismatch outright rather than only
+        // in debug.
+        assert_eq!(
             vector.len(),
             self.dim,
             "query vector dim {} != centroid dim {}",

@@ -117,8 +117,9 @@ impl LocalPipeline {
     /// Force calibration at end-of-input (batch mode) when the streaming triggers never
     /// fired. Fits on whatever templates were collected if at least
     /// `MIN_CALIBRATION_TEMPLATES` are present. Returns whether the detector is now calibrated.
-    /// After this, earlier lines (which returned `score: None`) can be re-scored by re-calling
-    /// `process` — once the detector exists, `process` is a pure scorer.
+    /// After this, earlier lines (which returned `score: None`) should be re-scored via
+    /// [`Self::rescore`] — it scores a known template without re-feeding the line into Drain,
+    /// which `process` would do.
     pub fn finalize(&mut self) -> bool {
         if self.detector.is_none() && self.calibration_count >= MIN_CALIBRATION_TEMPLATES {
             let k = CENTROID_K.min(self.calibration_count);

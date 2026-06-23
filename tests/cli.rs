@@ -43,10 +43,15 @@ fn pipe_to_watch(input: &str, extra_args: &[&str]) -> (bool, String, String) {
 }
 
 fn pipe_to_scan(input: &str, format: &str) -> (bool, String, String) {
+    pipe_to_scan_args(input, format, &[])
+}
+
+fn pipe_to_scan_args(input: &str, format: &str, extra_args: &[&str]) -> (bool, String, String) {
     let mut cmd = Command::new(binary())
         .arg("scan")
         .arg("--format")
         .arg(format)
+        .args(extra_args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -167,7 +172,10 @@ fn scan_calibrates_below_64_templates() {
         "search index rebuilt from latest snapshot",
     ];
     let input = lines.join("\n");
-    let (ok, stdout, _stderr) = pipe_to_scan(&input, "json");
+    // --threshold 0 forces every scored line to count as an anomaly. Since all 11 lines
+    // are seen before EOF calibration (score: None on the first pass), a non-zero
+    // anomalies_total here can only come from the EOF rescore loop actually running.
+    let (ok, stdout, _stderr) = pipe_to_scan_args(&input, "json", &["--threshold", "0"]);
     assert!(ok, "turbolog scan should exit 0");
     let parsed: serde_json::Value =
         serde_json::from_str(&stdout).expect("scan --format json must emit valid JSON");
@@ -175,6 +183,10 @@ fn scan_calibrates_below_64_templates() {
         parsed["calibrated"],
         serde_json::Value::Bool(true),
         "scan must calibrate below 64 templates via EOF finalize: {stdout}"
+    );
+    assert!(
+        parsed["anomalies_total"].as_u64().unwrap_or(0) > 0,
+        "EOF rescore must re-evaluate pre-calibration lines (anomalies_total > 0): {stdout}"
     );
 }
 
