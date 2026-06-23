@@ -26,16 +26,38 @@ pub enum DetectionResult {
 
 pub struct AnomalyDetector {
     /// Frozen centroids representing normal log distribution, protecting against drift.
-    frozen_centroids: Vec<Vec<f32>>,
+    /// Stored as a flat `k × dim` buffer (contiguous in memory) so the per-line
+    /// nearest-centroid scan streams linearly instead of chasing `k` heap pointers.
+    centroids: Vec<f32>,
+    dim: usize,
     anomaly_threshold: f32,
 }
 
-fn euclidean(a: &[f32], b: &[f32]) -> f32 {
-    a.iter()
-        .zip(b)
-        .map(|(x, y)| (x - y) * (x - y))
-        .sum::<f32>()
-        .sqrt()
+/// Number of robust standard deviations (MAD-scaled) above the median a sample must sit
+/// to be flagged anomalous in [`AnomalyDetector::fit_auto`].
+const AUTO_THRESHOLD_Z: f32 = 3.0;
+
+/// `1 / Phi^-1(0.75)` — scales MAD to be a consistent estimator of the standard deviation
+/// for normally-distributed data.
+const MAD_TO_SIGMA: f32 = 1.4826;
+
+/// Squared Euclidean distance. The hot path only needs ordering (argmin) and a single
+/// threshold compare, both of which are monotonic in the square — so we defer the one
+/// `sqrt` to the caller instead of paying it per centroid.
+fn euclidean_sq(a: &[f32], b: &[f32]) -> f32 {
+    a.iter().zip(b).map(|(x, y)| (x - y) * (x - y)).sum::<f32>()
+}
+
+/// Sorts `values` in place and returns the median (average of the two middle elements
+/// for even-length input). Used for the robust threshold in [`AnomalyDetector::fit_auto`].
+fn median_of(values: &mut [f32]) -> f32 {
+    values.sort_by(f32::total_cmp);
+    let n = values.len();
+    if n.is_multiple_of(2) {
+        (values[n / 2 - 1] + values[n / 2]) / 2.0
+    } else {
+        values[n / 2]
+    }
 }
 
 impl AnomalyDetector {
@@ -44,8 +66,16 @@ impl AnomalyDetector {
             !frozen_centroids.is_empty(),
             "At least one centroid is required"
         );
+        let dim = frozen_centroids[0].len();
+        assert!(dim > 0, "Centroids must be non-empty");
+        assert!(
+            frozen_centroids.iter().all(|c| c.len() == dim),
+            "All centroids must share the same dimension"
+        );
+        let centroids = frozen_centroids.concat();
         Self {
-            frozen_centroids,
+            centroids,
+            dim,
             anomaly_threshold,
         }
     }
@@ -69,7 +99,7 @@ impl AnomalyDetector {
             for (i, assign) in assignment.iter_mut().enumerate().take(n) {
                 let mut best = (f32::INFINITY, 0usize);
                 for (c, centroid) in centroids.iter().enumerate() {
-                    let d = euclidean(row(i), centroid);
+                    let d = euclidean_sq(row(i), centroid);
                     if d < best.0 {
                         best = (d, c);
                     }
@@ -98,19 +128,29 @@ impl AnomalyDetector {
     }
 
     /// Like [`Self::fit`], but derives the anomaly threshold from the calibration data
-    /// itself: p99 of each sample's distance to its nearest centroid, with a 25% margin.
+    /// itself via a robust (median + MAD) estimator rather than a percentile of the same
+    /// sample set.
+    ///
+    /// A naive p99-of-calibration-distances threshold is train-on-test: it sits above
+    /// ~99% of the very data it was fit on by construction, so outliers already present
+    /// in the calibration set (and most future ones) fall below it and never get flagged.
+    /// Median and MAD are robust statistics — a handful of far-away points barely moves
+    /// either — so `threshold = median + Z * robust_sigma` stays low enough that those
+    /// same outliers land above it.
+    ///
     /// `floor` is the minimum threshold — it dominates when the calibration samples are
-    /// tightly clustered (p99 ≈ 0), preventing a degenerate zero threshold.
+    /// tightly clustered (median ≈ mad ≈ 0), preventing a degenerate zero threshold.
     pub fn fit_auto(normal_vectors: &[f32], dim: usize, k: usize, floor: f32) -> Self {
-        const AUTO_THRESHOLD_MARGIN: f32 = 1.25;
         let mut detector = Self::fit(normal_vectors, dim, k, floor);
         let n = normal_vectors.len() / dim;
         let mut distances: Vec<f32> = (0..n)
             .map(|i| detector.min_distance(&normal_vectors[i * dim..(i + 1) * dim]))
             .collect();
-        distances.sort_by(f32::total_cmp);
-        let p99 = distances[((distances.len() - 1) as f32 * 0.99) as usize];
-        detector.anomaly_threshold = (p99 * AUTO_THRESHOLD_MARGIN).max(floor);
+        let median = median_of(&mut distances);
+        let mut abs_dev: Vec<f32> = distances.iter().map(|d| (d - median).abs()).collect();
+        let mad = median_of(&mut abs_dev);
+        let robust_sigma = MAD_TO_SIGMA * mad;
+        detector.anomaly_threshold = (median + AUTO_THRESHOLD_Z * robust_sigma).max(floor);
         detector
     }
 
@@ -122,10 +162,11 @@ impl AnomalyDetector {
     /// Tier 1 operation: Euclidean distance to the nearest frozen centroid. O(k·dim).
     /// Used both for filtering and threshold calibration (e.g. p99 of normal distance).
     pub fn min_distance(&self, vector: &[f32]) -> f32 {
-        self.frozen_centroids
-            .iter()
-            .map(|c| euclidean(c, vector))
+        self.centroids
+            .chunks_exact(self.dim)
+            .map(|c| euclidean_sq(c, vector))
             .fold(f32::INFINITY, f32::min)
+            .sqrt()
     }
 
     /// Classifies an incoming vector in O(k) complexity. Falls back to deep search in search_index on threshold breach.
@@ -201,7 +242,7 @@ mod tests {
 
     #[test]
     fn fit_auto_derives_threshold_from_spread() {
-        // Cluster with intra-cluster spread: p99 distance × 1.25 should exceed the floor.
+        // Cluster with intra-cluster spread: median + Z*robust_sigma should exceed the floor.
         let mut data = Vec::new();
         for j in 0..50 {
             let eps = j as f32 * 0.01; // up to 0.49 away from e1 in one coordinate
@@ -210,15 +251,47 @@ mod tests {
         let det = AnomalyDetector::fit_auto(&data, 4, 1, 0.05);
         assert!(
             det.threshold() > 0.05,
-            "p99-derived threshold should exceed the floor: {}",
+            "robust threshold should exceed the floor given real spread: {}",
             det.threshold()
         );
         // A new sample within the observed spread stays normal under min_distance.
         assert!(det.min_distance(&[1.0, 0.2, 0.0, 0.0]) <= det.threshold());
 
-        // Degenerate case: identical samples → p99 = 0 → floor dominates.
+        // Degenerate case: identical samples → median = mad = 0 → floor dominates.
         let tight: Vec<f32> = [1.0f32, 0.0, 0.0, 0.0].repeat(20);
         let det = AnomalyDetector::fit_auto(&tight, 4, 1, 0.5);
-        assert_eq!(det.threshold(), 0.5, "floor must dominate when p99 ≈ 0");
+        assert_eq!(
+            det.threshold(),
+            0.5,
+            "floor must dominate when median/mad ≈ 0"
+        );
+    }
+
+    #[test]
+    fn fit_auto_flags_in_sample_outliers() {
+        // Regression for the train-on-test bug: a tight cluster plus a couple of
+        // far-away points, calibrated together. A naive p99*1.25 threshold would sit
+        // above the outliers themselves (since they're part of the same sample), so
+        // they'd never be flagged. The robust median/MAD threshold should not be
+        // dragged up by them, leaving the outliers above `threshold()`.
+        let mut data = Vec::new();
+        for j in 0..30 {
+            let eps = j as f32 * 0.001; // tight cluster around e1
+            data.extend_from_slice(&[1.0, eps, 0.0, 0.0]);
+        }
+        let outliers: [[f32; 4]; 2] = [[1.0, 5.0, 0.0, 0.0], [1.0, -5.0, 0.0, 0.0]];
+        for o in &outliers {
+            data.extend_from_slice(o);
+        }
+        let det = AnomalyDetector::fit_auto(&data, 4, 1, 0.05);
+        for o in &outliers {
+            let score = det.min_distance(o);
+            assert!(
+                score > det.threshold(),
+                "injected outlier should score above threshold ({} <= {})",
+                score,
+                det.threshold()
+            );
+        }
     }
 }
