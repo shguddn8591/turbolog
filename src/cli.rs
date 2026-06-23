@@ -36,6 +36,10 @@ pub enum Command {
         /// Output format: "text" (default) or "json"
         #[arg(long, default_value = "text")]
         format: String,
+        /// Anomaly score threshold override (default: auto-calibrated from data).
+        /// Use this to tune sensitivity on small or low-cardinality inputs.
+        #[arg(long)]
+        threshold: Option<f32>,
         /// Explain top anomalies using a local LLM (auto-detects Ollama or LM Studio)
         #[arg(long)]
         explain: bool,

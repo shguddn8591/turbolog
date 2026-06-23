@@ -8,16 +8,12 @@
 //!   TURBOLOG_AUTH_TOKEN (optional)
 
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::time::Duration;
 
 use clap::Parser;
 
 use turbolog::cli::{Cli, Command};
 use turbolog::embedded::make_embedder;
-use turbolog::engine::{EngineConfig, TurboLogEngine};
 use turbolog::history::HistoryStore;
-use turbolog::http::run_server;
 use turbolog::pipeline::LocalPipeline;
 
 fn env_or(key: &str, default: &str) -> String {
@@ -36,10 +32,17 @@ fn main() -> anyhow::Result<()> {
         } => run_watch_cmd(threshold, explain, llm_url.as_deref(), llm_model.as_deref()),
         Command::Scan {
             format,
+            threshold,
             explain,
             llm_url,
             llm_model,
-        } => run_scan_cmd(&format, explain, llm_url.as_deref(), llm_model.as_deref()),
+        } => run_scan_cmd(
+            &format,
+            threshold,
+            explain,
+            llm_url.as_deref(),
+            llm_model.as_deref(),
+        ),
         Command::History {
             since,
             template,
@@ -50,7 +53,14 @@ fn main() -> anyhow::Result<()> {
     }
 }
 
+#[cfg(feature = "server")]
 fn run_serve() -> anyhow::Result<()> {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use turbolog::engine::{EngineConfig, TurboLogEngine};
+    use turbolog::http::run_server;
+
     let port = env_or("TURBOLOG_PORT", "8087");
     let model_dir = PathBuf::from(env_or("TURBOLOG_MODEL_DIR", "./models"));
     let cfg = EngineConfig {
@@ -97,12 +107,18 @@ fn run_serve() -> anyhow::Result<()> {
     let auth_token = std::env::var("TURBOLOG_AUTH_TOKEN")
         .ok()
         .filter(|t| !t.is_empty());
-    let (addr, handles) = run_server(engine, &format!("0.0.0.0:{port}"), 4, auth_token)?;
+    let bind = env_or("TURBOLOG_BIND", "127.0.0.1");
+    let (addr, handles) = run_server(engine, &format!("{bind}:{port}"), 4, auth_token)?;
     println!("TurboLog listening on http://{addr}");
     for handle in handles {
         let _ = handle.join();
     }
     Ok(())
+}
+
+#[cfg(not(feature = "server"))]
+fn run_serve() -> anyhow::Result<()> {
+    anyhow::bail!("Server mode is not compiled in. Rebuild with:\n  cargo build --features server")
 }
 
 fn run_watch_cmd(
@@ -141,13 +157,14 @@ fn run_watch_cmd(
 
 fn run_scan_cmd(
     format: &str,
+    threshold: Option<f32>,
     explain: bool,
     llm_url: Option<&str>,
     llm_model: Option<&str>,
 ) -> anyhow::Result<()> {
     let model_dir = PathBuf::from(env_or("TURBOLOG_MODEL_DIR", "./models"));
     let embedder = make_embedder(&model_dir)?;
-    let mut pipeline = LocalPipeline::new(embedder, None);
+    let mut pipeline = LocalPipeline::new(embedder, threshold);
 
     let llm = if explain {
         let client = turbolog::llm::LlmClient::detect(llm_url, llm_model);

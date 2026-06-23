@@ -30,9 +30,13 @@ pub fn run_watch(
             continue;
         }
 
+        let was_calibrated = pipeline.calibrated();
         match pipeline.process(&line) {
             Ok(result) => handle_result(&line, &result, use_color, llm, history),
             Err(e) => eprintln!("turbolog: embedding error: {e}"),
+        }
+        if !was_calibrated && pipeline.calibrated() {
+            print_calibration_complete(use_color);
         }
     }
 

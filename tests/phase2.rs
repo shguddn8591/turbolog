@@ -1,5 +1,7 @@
 //! Phase 2 integration test: PingPong Indexer (swap/concurrency/chunk backup) + K-Centroid 2-tier detection.
 
+#![cfg(feature = "server")]
+
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;

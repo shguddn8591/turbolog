@@ -57,9 +57,12 @@ Alternatively, grab a prebuilt binary (no Rust needed) from [Releases](https://g
 No log file? Paste this to try it immediately:
 
 ```bash
-printf 'user login OK\nrequest processed in 12ms\nOOM killer activated for pid 4821\ndisk usage at 99%%\nuser login OK\nrequest processed in 8ms\n' \
-  | turbolog watch
+printf 'user login OK\nrequest processed in 12ms\nOOM killer activated for pid 4821\ndisk usage at 99%%\ncache miss while fetching session key\ndatabase migration completed\nbackup job finished cleanly\npayment authorized through gateway\n' \
+  | turbolog scan
 ```
+
+> `scan` reads to EOF and calibrates once it has at least 8 distinct templates, so it works on small batches.
+> `watch` is for live streams (`tail -f`) and calibrates as templates accumulate.
 
 With your own logs:
 

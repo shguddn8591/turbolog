@@ -54,6 +54,22 @@ pub fn run_scan(
         }
     }
 
+    // End of input: if the streaming triggers never fired (small batch), force-calibrate
+    // on the collected templates, then re-score the lines seen before the detector existed.
+    // Uses `rescore` (template -> cached vector) instead of `process` so this doesn't
+    // re-feed every line into Drain's stateful tree a second time.
+    if pipeline.finalize() {
+        for entry in &mut entries {
+            if entry.result.score.is_none() {
+                match pipeline.rescore(&entry.result.template) {
+                    Ok(Some(result)) => entry.result = result,
+                    Ok(None) => {}
+                    Err(e) => eprintln!("turbolog: embedding error: {e}"),
+                }
+            }
+        }
+    }
+
     let total = entries.len();
     let anomalies: Vec<&ScanEntry> = entries.iter().filter(|e| e.result.is_anomaly).collect();
     let anomaly_count = anomalies.len();
@@ -149,7 +165,7 @@ fn print_text_report(
     println!("Anomalies       : {anomalies} ({rate:.2}%)");
     if !calibrated {
         println!(
-            "Note            : Calibration incomplete (need 64 unique templates) — scores may be unreliable"
+            "Note            : Not enough data to calibrate (need at least 8 unique log templates) — scores unavailable"
         );
     }
     if top.is_empty() {

@@ -1,6 +1,8 @@
 //! Phase 3 integration test: WAL crash recovery, ring merge search, auto-calibration, HTTP API.
 //! Model files required (`./scripts/download_model.sh`) — skip if not present.
 
+#![cfg(feature = "server")]
+
 use std::path::PathBuf;
 use std::sync::Arc;
 
