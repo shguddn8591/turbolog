@@ -30,7 +30,7 @@ pub struct ParsedLog {
 }
 
 /// FNV-1a 64-bit — Deterministic hash for template_id, independent of process restarts or Rust versions.
-fn fnv1a64(s: &str) -> u64 {
+pub(crate) fn fnv1a64(s: &str) -> u64 {
     let mut h: u64 = 0xcbf29ce484222325;
     for b in s.as_bytes() {
         h ^= u64::from(*b);
@@ -139,21 +139,23 @@ impl Embedder {
 
         let outputs = self.session.run(ort::inputs![
             "input_ids" => Tensor::from_array(([1usize, len], ids))?,
-            "attention_mask" => Tensor::from_array(([1usize, len], mask.clone()))?,
+            "attention_mask" => Tensor::from_array(([1usize, len], mask))?,
             "token_type_ids" => Tensor::from_array(([1usize, len], type_ids))?,
         ])?;
         let (shape, data) = outputs["last_hidden_state"].try_extract_tensor::<f32>()?;
         let hidden = shape[2] as usize;
 
-        // Mean pooling based on attention mask
+        // Mean pooling based on attention mask. Pool straight from the tokenizer's u32
+        // mask so the i64 copy can be moved into the tensor above (no clone).
+        let attn = encoding.get_attention_mask();
         let mut vector = vec![0f32; hidden];
         let mut count = 0f32;
-        for (token, &m) in mask.iter().enumerate() {
+        for (token, &m) in attn.iter().enumerate() {
             if m == 1 {
                 count += 1.0;
-                let offset = token * hidden;
-                for (j, v) in vector.iter_mut().enumerate() {
-                    *v += data[offset + j];
+                let row = &data[token * hidden..(token + 1) * hidden];
+                for (v, &d) in vector.iter_mut().zip(row) {
+                    *v += d;
                 }
             }
         }
@@ -223,6 +225,23 @@ impl TemplateCache {
         self.cache.put(template_id, vector);
     }
 
+    /// Looks up a vector by template string WITHOUT touching the Drain tree — for
+    /// re-scoring a template whose parse result (and thus template_id) is already known,
+    /// avoiding a second `add_log_line` re-feed of the same line into Drain's stateful tree.
+    pub fn lookup_by_template(&mut self, template: &str) -> Option<Arc<[f32]>> {
+        let id = fnv1a64(template);
+        match self.cache.get(&id) {
+            Some(v) => {
+                self.hits += 1;
+                Some(Arc::clone(v))
+            }
+            None => {
+                self.misses += 1;
+                None
+            }
+        }
+    }
+
     pub fn hits(&self) -> u64 {
         self.hits
     }
@@ -284,6 +303,20 @@ impl VectorCache {
     /// Embeds a search query — queries bypass the LRU cache since they are not templates.
     pub fn embed_uncached(&mut self, text: &str) -> Result<Vec<f32>> {
         self.embedder.embed(text)
+    }
+
+    /// Gets the vector for an already-known template, WITHOUT re-running Drain (the
+    /// template is taken as given, not re-derived from a raw log line). Embeds on cache
+    /// miss only — used by [`crate::pipeline::LocalPipeline::rescore`] so re-scoring a
+    /// line after calibration doesn't re-feed the line into the Drain tree a second time.
+    pub fn vector_for_template(&mut self, template: &str) -> Result<Arc<[f32]>> {
+        if let Some(vector) = self.templates.lookup_by_template(template) {
+            return Ok(vector);
+        }
+        let vector: Arc<[f32]> = self.embedder.embed(template)?.into();
+        self.templates
+            .insert(fnv1a64(template), Arc::clone(&vector));
+        Ok(vector)
     }
 
     pub fn hits(&self) -> u64 {

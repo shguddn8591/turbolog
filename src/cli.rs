@@ -36,6 +36,11 @@ pub enum Command {
         /// Output format: "text" (default) or "json"
         #[arg(long, default_value = "text")]
         format: String,
+        /// Anomaly score floor override (default: auto-calibrated from data).
+        /// Use this to surface anomalies in a single small file, where the
+        /// auto-threshold is set above every in-sample line by design.
+        #[arg(long)]
+        threshold: Option<f32>,
         /// Explain top anomalies using a local LLM (auto-detects Ollama or LM Studio)
         #[arg(long)]
         explain: bool,

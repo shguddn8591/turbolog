@@ -142,6 +142,43 @@ fn scan_json_report_is_valid() {
 }
 
 #[test]
+fn scan_calibrates_below_64_templates() {
+    // Regression: previously the detector required 64 unique templates and never
+    // calibrated on small inputs (scores stayed None). scan now force-calibrates at EOF
+    // once at least MIN_CALIBRATION_TEMPLATES (8) distinct templates are present.
+    if !models_available() {
+        eprintln!("skipping cli::scan_calibrates_below_64_templates — models not present");
+        return;
+    }
+    // 11 STRUCTURALLY distinct templates (well under 64, above the floor of 8).
+    // Note: Drain collapses numeric variants into one template, so these must differ
+    // in structure, not just in numbers.
+    let lines = [
+        "user authentication succeeded for account",
+        "disk space running low on primary partition",
+        "cache miss while fetching session key",
+        "outbound email delivered to recipient",
+        "database migration completed without errors",
+        "scheduled backup job finished cleanly",
+        "payment authorized through external gateway",
+        "configuration reloaded from environment",
+        "websocket client subscribed to channel",
+        "image thumbnail generated and stored",
+        "search index rebuilt from latest snapshot",
+    ];
+    let input = lines.join("\n");
+    let (ok, stdout, _stderr) = pipe_to_scan(&input, "json");
+    assert!(ok, "turbolog scan should exit 0");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("scan --format json must emit valid JSON");
+    assert_eq!(
+        parsed["calibrated"],
+        serde_json::Value::Bool(true),
+        "scan must calibrate below 64 templates via EOF finalize: {stdout}"
+    );
+}
+
+#[test]
 fn help_flag_works() {
     let output = Command::new(binary())
         .arg("--help")

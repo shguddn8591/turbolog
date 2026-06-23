@@ -32,10 +32,17 @@ fn main() -> anyhow::Result<()> {
         } => run_watch_cmd(threshold, explain, llm_url.as_deref(), llm_model.as_deref()),
         Command::Scan {
             format,
+            threshold,
             explain,
             llm_url,
             llm_model,
-        } => run_scan_cmd(&format, explain, llm_url.as_deref(), llm_model.as_deref()),
+        } => run_scan_cmd(
+            &format,
+            threshold,
+            explain,
+            llm_url.as_deref(),
+            llm_model.as_deref(),
+        ),
         Command::History {
             since,
             template,
@@ -150,13 +157,14 @@ fn run_watch_cmd(
 
 fn run_scan_cmd(
     format: &str,
+    threshold: Option<f32>,
     explain: bool,
     llm_url: Option<&str>,
     llm_model: Option<&str>,
 ) -> anyhow::Result<()> {
     let model_dir = PathBuf::from(env_or("TURBOLOG_MODEL_DIR", "./models"));
     let embedder = make_embedder(&model_dir)?;
-    let mut pipeline = LocalPipeline::new(embedder, None);
+    let mut pipeline = LocalPipeline::new(embedder, threshold);
 
     let llm = if explain {
         let client = turbolog::llm::LlmClient::detect(llm_url, llm_model);
