@@ -162,6 +162,16 @@ impl AnomalyDetector {
     /// Tier 1 operation: Euclidean distance to the nearest frozen centroid. O(k·dim).
     /// Used both for filtering and threshold calibration (e.g. p99 of normal distance).
     pub fn min_distance(&self, vector: &[f32]) -> f32 {
+        // euclidean_sq zips, so a wrong-length vector would silently score over a prefix
+        // rather than erroring. Always upheld by construction (single 384-d embedder), so
+        // a debug-only check keeps the per-line hot path free in release.
+        debug_assert_eq!(
+            vector.len(),
+            self.dim,
+            "query vector dim {} != centroid dim {}",
+            vector.len(),
+            self.dim
+        );
         self.centroids
             .chunks_exact(self.dim)
             .map(|c| euclidean_sq(c, vector))
