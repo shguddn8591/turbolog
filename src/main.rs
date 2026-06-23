@@ -8,16 +8,12 @@
 //!   TURBOLOG_AUTH_TOKEN (optional)
 
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::time::Duration;
 
 use clap::Parser;
 
 use turbolog::cli::{Cli, Command};
 use turbolog::embedded::make_embedder;
-use turbolog::engine::{EngineConfig, TurboLogEngine};
 use turbolog::history::HistoryStore;
-use turbolog::http::run_server;
 use turbolog::pipeline::LocalPipeline;
 
 fn env_or(key: &str, default: &str) -> String {
@@ -50,7 +46,14 @@ fn main() -> anyhow::Result<()> {
     }
 }
 
+#[cfg(feature = "server")]
 fn run_serve() -> anyhow::Result<()> {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use turbolog::engine::{EngineConfig, TurboLogEngine};
+    use turbolog::http::run_server;
+
     let port = env_or("TURBOLOG_PORT", "8087");
     let model_dir = PathBuf::from(env_or("TURBOLOG_MODEL_DIR", "./models"));
     let cfg = EngineConfig {
@@ -97,12 +100,18 @@ fn run_serve() -> anyhow::Result<()> {
     let auth_token = std::env::var("TURBOLOG_AUTH_TOKEN")
         .ok()
         .filter(|t| !t.is_empty());
-    let (addr, handles) = run_server(engine, &format!("0.0.0.0:{port}"), 4, auth_token)?;
+    let bind = env_or("TURBOLOG_BIND", "127.0.0.1");
+    let (addr, handles) = run_server(engine, &format!("{bind}:{port}"), 4, auth_token)?;
     println!("TurboLog listening on http://{addr}");
     for handle in handles {
         let _ = handle.join();
     }
     Ok(())
+}
+
+#[cfg(not(feature = "server"))]
+fn run_serve() -> anyhow::Result<()> {
+    anyhow::bail!("Server mode is not compiled in. Rebuild with:\n  cargo build --features server")
 }
 
 fn run_watch_cmd(
