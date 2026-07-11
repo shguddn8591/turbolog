@@ -84,6 +84,18 @@ turbolog completions zsh > ~/.zfunc/_turbolog
 turbolog completions fish > ~/.config/fish/completions/turbolog.fish
 ```
 
+## Demo
+
+Run the bundled demo (works from a source checkout, no install needed):
+
+```bash
+./scripts/demo.sh          # live streaming — only anomalies surface
+./scripts/demo.sh explain  # same, plus local LLM explanations
+```
+
+It streams a realistic baseline so the detector calibrates, then injects genuine
+anomalies (OOM, connection refused, segfault, kernel lockup) that get flagged live.
+
 ## Recipes
 
 ### Daily aliases
