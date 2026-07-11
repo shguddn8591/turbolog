@@ -17,12 +17,25 @@
 TurboLog is a **local-first log anomaly detector** for **terminal-centric developers**.
 Pipe your logs in, get anomalies out — with optional one-line AI explanations from your local Ollama or LM Studio.
 
-```
-[ANOMALY 0.91] OOM killer activated for pid 4821
-  └─ Kernel killed the process due to memory exhaustion. Check memory limits and RSS growth.
+<p align="center">
+  <img src="docs/demo.svg" alt="TurboLog live anomaly detection demo" width="720">
+</p>
 
-[ANOMALY 0.87] Connection refused to postgres:5432 after 3 retries
-  └─ Connection pool likely exhausted or DB is down. Check pg_stat_activity and pool settings.
+**Try it in 10 seconds** (from a source checkout):
+
+```bash
+./scripts/demo.sh          # live streaming demo — only anomalies surface
+./scripts/demo.sh explain  # same, plus local LLM explanations
+```
+
+TurboLog learns your normal traffic, then flags the outliers:
+
+```
+$ tail -f app.log | turbolog watch --only-anomalies
+[ANOMALY 1.03] ERROR OOM killer activated for pid 4821 memory exhausted
+[ANOMALY 1.07] ERROR connection refused to postgres 5432 after 3 retries
+  ↻ recurring pattern
+[ANOMALY 1.08] FATAL segfault in worker thread null pointer dereference
 ```
 
 **Two AI layers — only one is required:**
@@ -54,15 +67,31 @@ Alternatively, grab a prebuilt binary (no Rust needed) from [Releases](https://g
 
 ## Quick Start
 
-No log file? Paste this to try it immediately:
+Fastest path — run the bundled demo (generates a realistic stream and pipes it in):
 
 ```bash
-printf 'user login OK\nrequest processed in 12ms\nOOM killer activated for pid 4821\ndisk usage at 99%%\ncache miss while fetching session key\ndatabase migration completed\nbackup job finished cleanly\npayment authorized through gateway\n' \
-  | turbolog scan
+./scripts/demo.sh
 ```
 
-> `scan` reads to EOF and calibrates once it has at least 8 distinct templates, so it works on small batches.
-> `watch` is for live streams (`tail -f`) and calibrates as templates accumulate.
+Or point it at your own live logs:
+
+```bash
+tail -f /var/log/app.log | turbolog watch --only-anomalies
+```
+
+> **How detection works:** TurboLog calibrates on your normal traffic first, then
+> flags outliers. `watch` calibrates as a live stream accumulates templates (or after a
+> 500-line warm-up), which is why the demo streams a baseline before the anomalies.
+> `scan` reads a batch to EOF — best for a file whose anomalies are *novel* relative to
+> the bulk of the log, since it calibrates on the same batch it scores.
+
+### Record your own GIF
+
+```bash
+# using asciinema + agg (https://github.com/asciinema/agg)
+asciinema rec demo.cast -c './scripts/demo.sh'
+agg demo.cast docs/demo.gif
+```
 
 With your own logs:
 
