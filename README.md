@@ -14,7 +14,7 @@
 
 ---
 
-TurboLog is a **local-first log anomaly detector** for solo developers.
+TurboLog is a **local-first log anomaly detector** for **terminal-centric developers**.
 Pipe your logs in, get anomalies out — with optional one-line AI explanations from your local Ollama or LM Studio.
 
 ```
@@ -82,9 +82,20 @@ turbolog scan --explain < app.log
 # Machine-readable output
 turbolog scan --format json < app.log
 
+# Shell-friendly: only anomalies, quiet status noise
+tail -f /var/log/app.log | turbolog watch --only-anomalies --quiet
+
+# CI gate: exit 1 when anomalies found
+turbolog scan < build.log || echo "anomalies detected"
+
 # Query stored anomaly history
 turbolog history --since 24h
+turbolog history --top --since 7d --format json
 turbolog history --since 7d --template "connection" --format json
+
+# Diagnose recurring patterns from local history
+turbolog diagnose --since 24h
+turbolog diagnose --since 2h --explain --format json
 ```
 
 ---
@@ -104,6 +115,8 @@ tail -f /var/log/app.log | turbolog watch --threshold 0.8
 | Flag | Description |
 |---|---|
 | `--explain` | Call local LLM to explain each anomaly |
+| `--only-anomalies` | Print only anomalous lines (hide normal/calibrating) |
+| `--quiet` / `-q` | Suppress status messages on stderr |
 | `--threshold <f32>` | Override auto-calibrated anomaly score floor |
 | `--llm-url <url>` | LLM base URL (default: auto-detect). Also: `TURBOLOG_LLM_URL` |
 | `--llm-model <name>` | LLM model name (default: `llama3.2`). Also: `TURBOLOG_LLM_MODEL` |
@@ -132,7 +145,10 @@ turbolog scan --format json --explain < app.log
 |---|---|
 | <code>--format text&#124;json</code> | Output format (default: `text`) |
 | `--explain` | Explain top 5 anomalies with local LLM |
+| `--quiet` / `-q` | Suppress status messages on stderr |
 | `--llm-url`, `--llm-model` | Same as `watch` |
+
+**Exit codes:** `0` = no anomalies, `1` = anomalies detected, `2` = error.
 
 Text report:
 
@@ -167,8 +183,35 @@ turbolog history --format json               # JSON output for piping
 |---|---|
 | `--since <DURATION>` | Look back this far: `7d`, `24h`, `1h`, `30m` (default: `7d`) |
 | `--template <PATTERN>` | Filter by Drain template substring |
+| `--top` | Group by template, sorted by frequency (most common first) |
 | <code>--format text&#124;json</code> | Output format (default: `text`) |
 | `--limit <N>` | Max rows to return (default: `50`) |
+
+### `diagnose` — Pattern summary from history
+
+Summarize recurring anomaly templates over a time window (reads `~/.local/share/turbolog/history.db`).
+
+```bash
+turbolog diagnose --since 24h
+turbolog diagnose --since 2h --explain
+turbolog diagnose --since 7d --format json --limit 5
+```
+
+| Flag | Description |
+|---|---|
+| `--since <DURATION>` | Look back this far (default: `24h`) |
+| <code>--format text&#124;json</code> | Output format (default: `text`) |
+| `--explain` | Summarize patterns with local LLM |
+| `--limit <N>` | Max patterns to include (default: `10`) |
+| `--quiet` / `-q` | Suppress status messages on stderr |
+
+### `completions` — Shell tab completion
+
+```bash
+turbolog completions bash > ~/.local/share/bash-completion/completions/turbolog
+turbolog completions zsh  > ~/.zfunc/_turbolog
+turbolog completions fish > ~/.config/fish/completions/turbolog.fish
+```
 
 When `--explain` is active in `watch` or `scan`, history entries also store the LLM explanation and use it as context for future occurrences of the same pattern:
 
@@ -350,23 +393,64 @@ curl http://localhost:8087/stats
 
 ---
 
+## Shell Recipes
+
+```bash
+# ~/.bashrc or ~/.zshrc
+alias tw='turbolog watch --only-anomalies'
+alias ts='turbolog scan --format json'
+alias td='turbolog diagnose --since 24h'
+
+# Dev server logs
+npm run dev 2>&1 | turbolog watch --explain
+
+# Docker
+docker logs -f myapp 2>&1 | turbolog watch --only-anomalies --quiet
+
+# jq + fzf over history
+turbolog history --top --format json | jq -r '.[] | "\(.count)x \(.template)"' | fzf
+
+# CI anomaly gate
+turbolog scan < build.log || exit 1
+```
+
+See [docs/CLI.md](docs/CLI.md) for the full terminal-first CLI reference.
+
+---
+
 ## Roadmap
 
-- [x] Drain template parsing + LRU vector cache
-- [x] K-means anomaly detection (calibration → detection)
-- [x] WAL crash recovery + hourly chunk compaction
-- [x] HTTP server with ingest / search / stats API
-- [x] `turbolog watch` — pipe CLI real-time streaming
-- [x] `turbolog scan` — batch scan with JSON output
-- [x] Embedded all-MiniLM-L6-v2 ONNX model (CPU, no GPU)
-- [x] `--explain` flag — Ollama / LM Studio anomaly explanation
-- [x] SQLite anomaly history (`~/.local/share/turbolog/history.db`)
-- [x] `turbolog history` — query past anomalies
-- [x] TUI dashboard (`turbolog ui`)
-- [x] GitHub Release automation + `cargo install` via crates.io
-- [ ] `turbolog diagnose` — root cause analysis across a time window
-- [ ] History-aware explanation context (recurring pattern detection)
-- [ ] VS Code / Neovim extension
+> For terminal-first, local-first developers. Pipe in, anomalies out.
+
+### Layer 0 — Pipe Core ✅
+- [x] `watch` / `scan` with stdin piping
+- [x] Embedded MiniLM (offline anomaly detection)
+- [x] `--explain` via Ollama / LM Studio
+- [x] `history` — SQLite anomaly memory
+
+### Layer 1 — Shell Ergonomics ✅
+- [x] `--only-anomalies` / `--quiet` flags
+- [x] Exit codes for shell scripts (`1` = anomalies found)
+- [x] bash / zsh / fish completions (`turbolog completions`)
+- [x] Default command shows help (not HTTP server)
+
+### Layer 2 — Local Diagnosis ✅
+- [x] History-aware LLM context (recurring patterns)
+- [x] `turbolog diagnose` — time-window pattern summary
+- [x] `history --top` — most frequent anomaly templates
+- [x] Recurring pattern badge in `watch` output
+
+### Layer 3 — Terminal Integration
+- [x] TUI dashboard (`turbolog ui --standalone`)
+- [ ] TUI history panel
+- [ ] Neovim integration guide
+
+### Advanced (self-hosters)
+- [x] `serve` HTTP API (feature `server`)
+- [x] Docker / k8s manifests
+- [ ] `/health`, `/ready`, `/metrics` HTTP endpoints
+
+See [tasks/cli-roadmap.md](tasks/cli-roadmap.md) and [tasks/advanced-server.md](tasks/advanced-server.md).
 
 ---
 

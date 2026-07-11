@@ -14,6 +14,11 @@ struct ScanEntry {
     result: LineResult,
 }
 
+pub struct ScanStats {
+    pub anomaly_count: usize,
+    pub lines_processed: usize,
+}
+
 #[derive(Serialize)]
 struct JsonReport<'a> {
     lines_processed: usize,
@@ -38,7 +43,8 @@ pub fn run_scan(
     format: &str,
     llm: Option<&LlmClient>,
     history: Option<&HistoryStore>,
-) -> Result<()> {
+    _quiet: bool,
+) -> Result<ScanStats> {
     let stdin = std::io::stdin();
     let reader = BufReader::new(stdin.lock());
     let mut entries: Vec<ScanEntry> = Vec::new();
@@ -146,7 +152,10 @@ pub fn run_scan(
         ),
     }
 
-    Ok(())
+    Ok(ScanStats {
+        anomaly_count,
+        lines_processed: total,
+    })
 }
 
 fn print_text_report(
