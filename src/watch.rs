@@ -22,7 +22,6 @@ pub struct WatchOptions {
 
 pub struct WatchStats {
     pub anomaly_count: u64,
-    pub lines_processed: u64,
 }
 
 pub fn run_watch(
@@ -35,10 +34,7 @@ pub fn run_watch(
         std::env::var("NO_COLOR").is_err() && std::io::stderr().is_terminal() && !opts.quiet;
     let stdin = std::io::stdin();
     let reader = BufReader::new(stdin.lock());
-    let mut stats = WatchStats {
-        anomaly_count: 0,
-        lines_processed: 0,
-    };
+    let mut stats = WatchStats { anomaly_count: 0 };
 
     for line in reader.lines() {
         let line = line?;
@@ -49,7 +45,6 @@ pub fn run_watch(
             continue;
         }
 
-        stats.lines_processed += 1;
         let was_calibrated = pipeline.calibrated();
         match pipeline.process(&line) {
             Ok(result) => {
@@ -78,16 +73,15 @@ fn handle_result(
 ) {
     if result.is_anomaly {
         let score = result.score.unwrap_or(0.0);
-        let recurring = history
-            .and_then(|h| h.context_for(&result.template))
-            .is_some();
+        // Single history lookup drives both the recurring badge and the LLM context.
+        let ctx = history.and_then(|h| h.context_for(&result.template));
         if color {
             println!("{RED}[ANOMALY {score:.2}]{RESET} {line}");
         } else {
             println!("[ANOMALY {score:.2}] {line}");
         }
 
-        if recurring {
+        if ctx.is_some() {
             if color {
                 println!("  {MAGENTA}↻ recurring pattern{RESET}");
             } else {
@@ -96,7 +90,6 @@ fn handle_result(
         }
 
         if let Some(client) = llm {
-            let ctx = history.and_then(|h| h.context_for(&result.template));
             match client.explain(line, score, ctx.as_deref()) {
                 Some(explanation) => {
                     if color {

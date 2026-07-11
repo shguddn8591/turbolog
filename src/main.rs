@@ -239,13 +239,8 @@ fn run_scan_cmd(
     };
 
     let history = HistoryStore::open().ok();
-    let stats = turbolog::scan::run_scan(
-        &mut pipeline,
-        format,
-        llm.as_ref(),
-        history.as_ref(),
-        quiet,
-    )?;
+    let stats =
+        turbolog::scan::run_scan(&mut pipeline, format, llm.as_ref(), history.as_ref())?;
 
     Ok(if stats.anomaly_count > 0 {
         EXIT_ANOMALIES

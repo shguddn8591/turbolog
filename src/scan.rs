@@ -16,7 +16,6 @@ struct ScanEntry {
 
 pub struct ScanStats {
     pub anomaly_count: usize,
-    pub lines_processed: usize,
 }
 
 #[derive(Serialize)]
@@ -43,7 +42,6 @@ pub fn run_scan(
     format: &str,
     llm: Option<&LlmClient>,
     history: Option<&HistoryStore>,
-    _quiet: bool,
 ) -> Result<ScanStats> {
     let stdin = std::io::stdin();
     let reader = BufReader::new(stdin.lock());
@@ -152,10 +150,7 @@ pub fn run_scan(
         ),
     }
 
-    Ok(ScanStats {
-        anomaly_count,
-        lines_processed: total,
-    })
+    Ok(ScanStats { anomaly_count })
 }
 
 fn print_text_report(
