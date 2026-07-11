@@ -1,4 +1,4 @@
-//! TurboLog binary entry point — subcommands: serve (default), watch, scan, ui.
+//! TurboLog binary entry point — subcommands: watch, scan, history, diagnose, ui, serve.
 //!
 //! Environment Variables (serve mode):
 //!   TURBOLOG_PORT       (default: 8087)
@@ -9,47 +9,102 @@
 
 use std::path::PathBuf;
 
-use clap::Parser;
-
+use clap::{CommandFactory, Parser};
 use turbolog::cli::{Cli, Command};
-use turbolog::embedded::make_embedder;
-use turbolog::history::HistoryStore;
-use turbolog::pipeline::LocalPipeline;
+
+/// Exit 0 — success, no anomalies detected.
+pub const EXIT_OK: i32 = 0;
+/// Exit 1 — anomalies detected (watch/scan/diagnose).
+pub const EXIT_ANOMALIES: i32 = 1;
 
 fn env_or(key: &str, default: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| default.to_string())
 }
 
-fn main() -> anyhow::Result<()> {
+fn main() {
+    let code = match run() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("turbolog: {e:#}");
+            2
+        }
+    };
+    std::process::exit(code);
+}
+
+fn run() -> anyhow::Result<i32> {
     let cli = Cli::parse();
-    match cli.command.unwrap_or(Command::Serve) {
-        Command::Serve => run_serve(),
+    match cli.command {
+        Command::Serve => {
+            run_serve()?;
+            Ok(EXIT_OK)
+        }
         Command::Watch {
             threshold,
             explain,
             llm_url,
             llm_model,
-        } => run_watch_cmd(threshold, explain, llm_url.as_deref(), llm_model.as_deref()),
+            only_anomalies,
+            quiet,
+        } => run_watch_cmd(
+            threshold,
+            explain,
+            llm_url.as_deref(),
+            llm_model.as_deref(),
+            only_anomalies,
+            quiet,
+        ),
         Command::Scan {
             format,
             threshold,
             explain,
             llm_url,
             llm_model,
+            quiet,
         } => run_scan_cmd(
             &format,
             threshold,
             explain,
             llm_url.as_deref(),
             llm_model.as_deref(),
+            quiet,
         ),
         Command::History {
             since,
             template,
+            top,
             format,
             limit,
-        } => run_history_cmd(&since, template.as_deref(), &format, limit),
-        Command::Ui { server, standalone } => run_ui_cmd(&server, standalone),
+        } => {
+            run_history_cmd(&since, template.as_deref(), top, &format, limit)?;
+            Ok(EXIT_OK)
+        }
+        Command::Diagnose {
+            since,
+            format,
+            explain,
+            llm_url,
+            llm_model,
+            limit,
+            quiet,
+        } => run_diagnose_cmd(
+            &since,
+            &format,
+            explain,
+            llm_url.as_deref(),
+            llm_model.as_deref(),
+            limit,
+            quiet,
+        ),
+        Command::Ui { server, standalone } => {
+            run_ui_cmd(&server, standalone)?;
+            Ok(EXIT_OK)
+        }
+        Command::Completions { shell } => {
+            let shell: clap_complete::Shell = shell.into();
+            clap_complete::generate(shell, &mut Cli::command(), "turbolog", &mut std::io::stdout());
+            Ok(EXIT_OK)
+        }
     }
 }
 
@@ -73,11 +128,10 @@ fn run_serve() -> anyhow::Result<()> {
         .unwrap_or(2)
         .max(1);
     let embedders = (0..pool_size)
-        .map(|_| make_embedder(&model_dir))
+        .map(|_| turbolog::embedded::make_embedder(&model_dir))
         .collect::<anyhow::Result<Vec<_>>>()?;
     let engine = Arc::new(TurboLogEngine::open(cfg, embedders)?);
 
-    // Swap Daemon: seals window every 10s, sweeps expired retention chunks every hour.
     {
         let engine = Arc::clone(&engine);
         std::thread::spawn(move || {
@@ -126,33 +180,40 @@ fn run_watch_cmd(
     explain: bool,
     llm_url: Option<&str>,
     llm_model: Option<&str>,
-) -> anyhow::Result<()> {
+    only_anomalies: bool,
+    quiet: bool,
+) -> anyhow::Result<i32> {
+    use turbolog::embedded::make_embedder;
+    use turbolog::history::HistoryStore;
+    use turbolog::pipeline::LocalPipeline;
+    use turbolog::watch::WatchOptions;
+
     let model_dir = PathBuf::from(env_or("TURBOLOG_MODEL_DIR", "./models"));
     let embedder = make_embedder(&model_dir)?;
     let mut pipeline = LocalPipeline::new(embedder, threshold);
 
     let llm = if explain {
-        let client = turbolog::llm::LlmClient::detect(llm_url, llm_model);
-        match &client {
-            Some(c) => eprintln!(
-                "[turbolog] LLM connected: {} (model: {})",
-                c.base_url(),
-                c.model()
-            ),
-            None => {
-                eprintln!("[turbolog] --explain: no local LLM found");
-                eprintln!("  Ollama  → https://ollama.ai  (runs on :11434)");
-                eprintln!("  LM Studio → https://lmstudio.ai  (runs on :1234)");
-            }
-        }
-        client
+        setup_llm(llm_url, llm_model, quiet)
     } else {
         None
     };
 
     let history = HistoryStore::open().ok();
-    eprintln!("[turbolog] streaming anomaly detection active (calibrating on first 64 templates)");
-    turbolog::watch::run_watch(&mut pipeline, llm.as_ref(), history.as_ref())
+    if !quiet {
+        eprintln!("[turbolog] streaming anomaly detection active (calibrating on first 64 templates)");
+    }
+
+    let stats = turbolog::watch::run_watch(
+        &mut pipeline,
+        llm.as_ref(),
+        history.as_ref(),
+        WatchOptions {
+            only_anomalies,
+            quiet,
+        },
+    )?;
+
+    Ok(exit_for_anomalies(stats))
 }
 
 fn run_scan_cmd(
@@ -161,45 +222,87 @@ fn run_scan_cmd(
     explain: bool,
     llm_url: Option<&str>,
     llm_model: Option<&str>,
-) -> anyhow::Result<()> {
+    quiet: bool,
+) -> anyhow::Result<i32> {
+    use turbolog::embedded::make_embedder;
+    use turbolog::history::HistoryStore;
+    use turbolog::pipeline::LocalPipeline;
+
     let model_dir = PathBuf::from(env_or("TURBOLOG_MODEL_DIR", "./models"));
     let embedder = make_embedder(&model_dir)?;
     let mut pipeline = LocalPipeline::new(embedder, threshold);
 
     let llm = if explain {
-        let client = turbolog::llm::LlmClient::detect(llm_url, llm_model);
-        match &client {
-            Some(c) => eprintln!(
-                "[turbolog] LLM connected: {} (model: {})",
-                c.base_url(),
-                c.model()
-            ),
-            None => {
-                eprintln!("[turbolog] --explain: no local LLM found");
-                eprintln!("  Ollama    → https://ollama.ai  (runs on :11434)");
-                eprintln!("  LM Studio → https://lmstudio.ai  (runs on :1234)");
-            }
-        }
-        client
+        setup_llm(llm_url, llm_model, quiet)
     } else {
         None
     };
 
     let history = HistoryStore::open().ok();
-    turbolog::scan::run_scan(&mut pipeline, format, llm.as_ref(), history.as_ref())
+    let stats =
+        turbolog::scan::run_scan(&mut pipeline, format, llm.as_ref(), history.as_ref())?;
+
+    Ok(if stats.anomaly_count > 0 {
+        EXIT_ANOMALIES
+    } else {
+        EXIT_OK
+    })
 }
 
 fn run_history_cmd(
     since: &str,
     template: Option<&str>,
+    top: bool,
     format: &str,
     limit: usize,
 ) -> anyhow::Result<()> {
+    use turbolog::history::{HistoryQuery, HistoryStore};
+
     let since_secs = parse_duration(since)
         .ok_or_else(|| anyhow::anyhow!("Invalid --since value '{since}'. Use: 7d, 24h, 30m"))?;
 
     let store = HistoryStore::open()?;
-    let entries = store.query(&turbolog::history::HistoryQuery {
+
+    if top {
+        let patterns = store.top_templates(since_secs, limit)?;
+        match format {
+            "json" => {
+                let json: Vec<serde_json::Value> = patterns
+                    .iter()
+                    .map(|p| {
+                        serde_json::json!({
+                            "template": p.template,
+                            "count": p.count,
+                            "avg_score": p.avg_score,
+                            "last_seen": p.last_seen,
+                            "sample_line": p.sample_line,
+                        })
+                    })
+                    .collect();
+                println!("{}", serde_json::to_string_pretty(&json)?);
+            }
+            _ => {
+                if patterns.is_empty() {
+                    println!("No anomalies found in the last {since}.");
+                } else {
+                    println!();
+                    println!("--- TurboLog History Top (last {since}) ---");
+                    for p in &patterns {
+                        let sample = truncate_display(&p.sample_line, 60);
+                        println!(
+                            "  {}×  [avg {:.2}]  {}",
+                            p.count, p.avg_score, p.template
+                        );
+                        println!("       e.g. {sample}");
+                    }
+                    println!();
+                }
+            }
+        }
+        return Ok(());
+    }
+
+    let entries = store.query(&HistoryQuery {
         since_secs: Some(since_secs),
         template: template.map(|s| s.to_string()),
         limit,
@@ -231,11 +334,7 @@ fn run_history_cmd(
                 println!("  {}", "-".repeat(72));
                 for e in &entries {
                     let dt = format_timestamp(e.timestamp);
-                    let display = if e.line.chars().nth(60).is_some() {
-                        format!("{}…", e.line.chars().take(59).collect::<String>())
-                    } else {
-                        e.line.clone()
-                    };
+                    let display = truncate_display(&e.line, 59);
                     println!("  {:<20}  {:<6.2}  {}", dt, e.score, display);
                     if let Some(ref exp) = e.explanation {
                         println!("    └─ {exp}");
@@ -255,6 +354,76 @@ fn run_history_cmd(
     Ok(())
 }
 
+fn run_diagnose_cmd(
+    since: &str,
+    format: &str,
+    explain: bool,
+    llm_url: Option<&str>,
+    llm_model: Option<&str>,
+    limit: usize,
+    quiet: bool,
+) -> anyhow::Result<i32> {
+    use turbolog::diagnose::run_diagnose;
+    use turbolog::history::HistoryStore;
+
+    let since_secs = parse_duration(since)
+        .ok_or_else(|| anyhow::anyhow!("Invalid --since value '{since}'. Use: 7d, 24h, 30m"))?;
+
+    let store = HistoryStore::open()?;
+    let llm = if explain {
+        setup_llm(llm_url, llm_model, quiet)
+    } else {
+        None
+    };
+
+    let has_issues = run_diagnose(
+        &store,
+        since,
+        since_secs,
+        format,
+        limit,
+        llm.as_ref(),
+        quiet,
+    )?;
+
+    Ok(if has_issues {
+        EXIT_ANOMALIES
+    } else {
+        EXIT_OK
+    })
+}
+
+fn setup_llm(
+    llm_url: Option<&str>,
+    llm_model: Option<&str>,
+    quiet: bool,
+) -> Option<turbolog::llm::LlmClient> {
+    let client = turbolog::llm::LlmClient::detect(llm_url, llm_model);
+    if !quiet {
+        match &client {
+            Some(c) => eprintln!(
+                "[turbolog] LLM connected: {} (model: {})",
+                c.base_url(),
+                c.model()
+            ),
+            None => {
+                eprintln!("[turbolog] --explain: no local LLM found");
+                eprintln!("  Ollama    → https://ollama.ai  (runs on :11434)");
+                eprintln!("  LM Studio → https://lmstudio.ai  (runs on :1234)");
+            }
+        }
+    }
+    client
+}
+
+fn exit_for_anomalies(stats: turbolog::watch::WatchStats) -> i32 {
+    if stats.anomaly_count > 0 {
+        EXIT_ANOMALIES
+    } else {
+        EXIT_OK
+    }
+}
+
 fn parse_duration(s: &str) -> Option<i64> {
     let s = s.trim();
     if let Some(n) = s.strip_suffix('d') {
@@ -269,19 +438,16 @@ fn parse_duration(s: &str) -> Option<i64> {
 }
 
 fn format_timestamp(ts: i64) -> String {
-    // Show as "YYYY-MM-DD HH:MM:SS" UTC using only std (no chrono).
     let secs = ts.max(0) as u64;
     let s = secs % 60;
     let m = (secs / 60) % 60;
     let h = (secs / 3600) % 24;
     let days = secs / 86_400;
-    // Days since Unix epoch → Gregorian. Tomohiko Sakamoto's algorithm.
     let (year, month, day) = days_to_ymd(days);
     format!("{year:04}-{month:02}-{day:02} {h:02}:{m:02}:{s:02}")
 }
 
 fn days_to_ymd(days: u64) -> (u64, u64, u64) {
-    // Civil calendar from days since 1970-01-01 (Howard Hinnant's algorithm).
     let z = days + 719_468;
     let era = z / 146_097;
     let doe = z - era * 146_097;
@@ -293,6 +459,14 @@ fn days_to_ymd(days: u64) -> (u64, u64, u64) {
     let mo = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = if mo <= 2 { y + 1 } else { y };
     (y, mo, d)
+}
+
+fn truncate_display(s: &str, max: usize) -> String {
+    if s.chars().nth(max).is_some() {
+        format!("{}…", s.chars().take(max).collect::<String>())
+    } else {
+        s.to_string()
+    }
 }
 
 fn run_ui_cmd(server: &str, standalone: bool) -> anyhow::Result<()> {

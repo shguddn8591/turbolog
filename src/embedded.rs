@@ -20,6 +20,7 @@ pub static TOKENIZER_BYTES: &[u8] = include_bytes!("../models/tokenizer.json");
 /// When not embedded, looks for model files in (priority order):
 ///   1. `model_dir` (explicit --model-dir or TURBOLOG_MODEL_DIR)
 ///   2. $XDG_DATA_HOME/turbolog/models  (~/.local/share/turbolog/models)
+///
 /// If neither exists, downloads from Hugging Face automatically.
 pub fn make_embedder(_model_dir: &Path) -> Result<Embedder> {
     #[cfg(feature = "embedded-model")]

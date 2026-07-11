@@ -8,6 +8,7 @@
 pub mod chunks;
 pub mod cli;
 pub mod detect;
+pub mod diagnose;
 pub mod embedded;
 #[cfg(feature = "server")]
 pub mod engine;
