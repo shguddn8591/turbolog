@@ -1,18 +1,19 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Parser)]
 #[command(
     name = "turbolog",
-    about = "Ultralight log anomaly detection — no API key, no Python, no bullshit"
+    about = "Ultralight log anomaly detection — no API key, no Python, no bullshit",
+    arg_required_else_help = true
 )]
 pub struct Cli {
     #[command(subcommand)]
-    pub command: Option<Command>,
+    pub command: Command,
 }
 
 #[derive(Subcommand)]
 pub enum Command {
-    /// Run the HTTP server daemon (default when no subcommand is given)
+    /// Run the HTTP server daemon
     Serve,
     /// Read stdin line-by-line and stream anomaly results with color highlighting
     Watch {
@@ -30,6 +31,12 @@ pub enum Command {
         /// Can also be set via TURBOLOG_LLM_MODEL env var.
         #[arg(long)]
         llm_model: Option<String>,
+        /// Print only anomalous lines (suppress normal and calibrating lines)
+        #[arg(long)]
+        only_anomalies: bool,
+        /// Suppress status messages on stderr (errors are still shown)
+        #[arg(short, long)]
+        quiet: bool,
     },
     /// Read stdin to EOF and print a summary report
     Scan {
@@ -49,6 +56,9 @@ pub enum Command {
         /// LLM model name. Overrides auto-detect default. Also: TURBOLOG_LLM_MODEL
         #[arg(long)]
         llm_model: Option<String>,
+        /// Suppress status messages on stderr (errors are still shown)
+        #[arg(short, long)]
+        quiet: bool,
     },
     /// Query stored anomaly history
     History {
@@ -74,4 +84,31 @@ pub enum Command {
         #[arg(long)]
         standalone: bool,
     },
+    /// Generate shell completion scripts (bash, zsh, fish, …)
+    Completions {
+        /// Target shell
+        #[arg(value_enum)]
+        shell: ShellName,
+    },
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+pub enum ShellName {
+    Bash,
+    Elvish,
+    Fish,
+    PowerShell,
+    Zsh,
+}
+
+impl From<ShellName> for clap_complete::Shell {
+    fn from(s: ShellName) -> Self {
+        match s {
+            ShellName::Bash => Self::Bash,
+            ShellName::Elvish => Self::Elvish,
+            ShellName::Fish => Self::Fish,
+            ShellName::PowerShell => Self::PowerShell,
+            ShellName::Zsh => Self::Zsh,
+        }
+    }
 }
