@@ -1,4 +1,4 @@
-//! TurboLog binary entry point — subcommands: watch, scan, history, ui, serve.
+//! TurboLog binary entry point — subcommands: watch, scan, history, diagnose, ui, serve.
 //!
 //! Environment Variables (serve mode):
 //!   TURBOLOG_PORT       (default: 8087)
@@ -9,13 +9,12 @@
 
 use std::path::PathBuf;
 
-use clap::CommandFactory;
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use turbolog::cli::{Cli, Command};
 
 /// Exit 0 — success, no anomalies detected.
 pub const EXIT_OK: i32 = 0;
-/// Exit 1 — anomalies detected (watch/scan).
+/// Exit 1 — anomalies detected (watch/scan/diagnose).
 pub const EXIT_ANOMALIES: i32 = 1;
 
 fn env_or(key: &str, default: &str) -> String {
@@ -73,12 +72,30 @@ fn run() -> anyhow::Result<i32> {
         Command::History {
             since,
             template,
+            top,
             format,
             limit,
         } => {
-            run_history_cmd(&since, template.as_deref(), &format, limit)?;
+            run_history_cmd(&since, template.as_deref(), top, &format, limit)?;
             Ok(EXIT_OK)
         }
+        Command::Diagnose {
+            since,
+            format,
+            explain,
+            llm_url,
+            llm_model,
+            limit,
+            quiet,
+        } => run_diagnose_cmd(
+            &since,
+            &format,
+            explain,
+            llm_url.as_deref(),
+            llm_model.as_deref(),
+            limit,
+            quiet,
+        ),
         Command::Ui { server, standalone } => {
             run_ui_cmd(&server, standalone)?;
             Ok(EXIT_OK)
@@ -241,6 +258,7 @@ fn run_scan_cmd(
 fn run_history_cmd(
     since: &str,
     template: Option<&str>,
+    top: bool,
     format: &str,
     limit: usize,
 ) -> anyhow::Result<()> {
@@ -250,6 +268,43 @@ fn run_history_cmd(
         .ok_or_else(|| anyhow::anyhow!("Invalid --since value '{since}'. Use: 7d, 24h, 30m"))?;
 
     let store = HistoryStore::open()?;
+
+    if top {
+        let patterns = store.top_templates(since_secs, limit)?;
+        match format {
+            "json" => {
+                let json: Vec<serde_json::Value> = patterns
+                    .iter()
+                    .map(|p| {
+                        serde_json::json!({
+                            "template": p.template,
+                            "count": p.count,
+                            "avg_score": p.avg_score,
+                            "last_seen": p.last_seen,
+                            "sample_line": p.sample_line,
+                        })
+                    })
+                    .collect();
+                println!("{}", serde_json::to_string_pretty(&json)?);
+            }
+            _ => {
+                if patterns.is_empty() {
+                    println!("No anomalies found in the last {since}.");
+                } else {
+                    println!();
+                    println!("--- TurboLog History Top (last {since}) ---");
+                    for p in &patterns {
+                        let sample = truncate_display(&p.sample_line, 60);
+                        println!("  {}×  [avg {:.2}]  {}", p.count, p.avg_score, p.template);
+                        println!("       e.g. {sample}");
+                    }
+                    println!();
+                }
+            }
+        }
+        return Ok(());
+    }
+
     let entries = store.query(&HistoryQuery {
         since_secs: Some(since_secs),
         template: template.map(|s| s.to_string()),
@@ -300,6 +355,41 @@ fn run_history_cmd(
     }
 
     Ok(())
+}
+
+fn run_diagnose_cmd(
+    since: &str,
+    format: &str,
+    explain: bool,
+    llm_url: Option<&str>,
+    llm_model: Option<&str>,
+    limit: usize,
+    quiet: bool,
+) -> anyhow::Result<i32> {
+    use turbolog::diagnose::run_diagnose;
+    use turbolog::history::HistoryStore;
+
+    let since_secs = parse_duration(since)
+        .ok_or_else(|| anyhow::anyhow!("Invalid --since value '{since}'. Use: 7d, 24h, 30m"))?;
+
+    let store = HistoryStore::open()?;
+    let llm = if explain {
+        setup_llm(llm_url, llm_model, quiet)
+    } else {
+        None
+    };
+
+    let has_issues = run_diagnose(
+        &store,
+        since,
+        since_secs,
+        format,
+        limit,
+        llm.as_ref(),
+        quiet,
+    )?;
+
+    Ok(if has_issues { EXIT_ANOMALIES } else { EXIT_OK })
 }
 
 fn setup_llm(

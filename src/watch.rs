@@ -13,6 +13,7 @@ const DIM: &str = "\x1b[2m";
 const RESET: &str = "\x1b[0m";
 const YELLOW: &str = "\x1b[33m";
 const CYAN: &str = "\x1b[36m";
+const MAGENTA: &str = "\x1b[35m";
 
 pub struct WatchOptions {
     pub only_anomalies: bool,
@@ -72,14 +73,23 @@ fn handle_result(
 ) {
     if result.is_anomaly {
         let score = result.score.unwrap_or(0.0);
+        // Single history lookup drives both the recurring badge and the LLM context.
+        let ctx = history.and_then(|h| h.context_for(&result.template));
         if color {
             println!("{RED}[ANOMALY {score:.2}]{RESET} {line}");
         } else {
             println!("[ANOMALY {score:.2}] {line}");
         }
 
+        if ctx.is_some() {
+            if color {
+                println!("  {MAGENTA}↻ recurring pattern{RESET}");
+            } else {
+                println!("  ↻ recurring pattern");
+            }
+        }
+
         if let Some(client) = llm {
-            let ctx = history.and_then(|h| h.context_for(&result.template));
             match client.explain(line, score, ctx.as_deref()) {
                 Some(explanation) => {
                     if color {

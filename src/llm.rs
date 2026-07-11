@@ -104,6 +104,46 @@ impl LlmClient {
         }
     }
 
+    /// Multi-pattern summary for `turbolog diagnose --explain`.
+    pub fn summarize(&self, user_content: &str) -> Option<String> {
+        let body = serde_json::json!({
+            "model": self.model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "You are a concise log analysis assistant for developers. \
+                                Summarize anomaly patterns and suggest what to investigate first. \
+                                Answer in 2-3 sentences. No preamble, no markdown."
+                },
+                {
+                    "role": "user",
+                    "content": user_content
+                }
+            ],
+            "max_tokens": 200,
+            "temperature": 0.3,
+            "stream": false
+        });
+
+        let resp = ureq::post(&format!("{}/v1/chat/completions", self.base_url))
+            .timeout(Duration::from_millis(EXPLAIN_TIMEOUT_MS))
+            .set("Content-Type", "application/json")
+            .send_json(&body)
+            .ok()?;
+
+        let json: serde_json::Value = resp.into_json().ok()?;
+        let text = json["choices"][0]["message"]["content"]
+            .as_str()?
+            .trim()
+            .to_string();
+
+        if text.is_empty() {
+            None
+        } else {
+            Some(text)
+        }
+    }
+
     pub fn base_url(&self) -> &str {
         &self.base_url
     }

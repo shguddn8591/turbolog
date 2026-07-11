@@ -241,7 +241,7 @@ fn help_flag_works() {
     assert!(output.status.success(), "turbolog --help should exit 0");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("watch") && stdout.contains("scan") && stdout.contains("completions"),
+        stdout.contains("watch") && stdout.contains("scan") && stdout.contains("diagnose"),
         "help output should mention subcommands: {stdout}"
     );
 }
@@ -270,7 +270,15 @@ fn no_subcommand_shows_help() {
 
 #[test]
 fn subcommand_help_works() {
-    for sub in &["serve", "watch", "scan", "history", "ui", "completions"] {
+    for sub in &[
+        "serve",
+        "watch",
+        "scan",
+        "history",
+        "diagnose",
+        "ui",
+        "completions",
+    ] {
         let output = Command::new(binary())
             .arg(sub)
             .arg("--help")
@@ -295,4 +303,32 @@ fn completions_bash_generates_script() {
         stdout.contains("turbolog") && stdout.contains("complete"),
         "bash completion script expected: {stdout}"
     );
+}
+
+#[test]
+fn diagnose_empty_history_exits_zero() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let output = Command::new(binary())
+        .args(["diagnose", "--since", "1h", "--format", "json"])
+        .env("XDG_DATA_HOME", dir.path())
+        .output()
+        .expect("failed to run diagnose");
+    assert_eq!(exit_code(output.status), Some(0));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).expect("valid json");
+    assert_eq!(parsed["total_anomalies"], 0);
+}
+
+#[test]
+fn history_top_json_empty() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let output = Command::new(binary())
+        .args(["history", "--top", "--format", "json", "--since", "1h"])
+        .env("XDG_DATA_HOME", dir.path())
+        .output()
+        .expect("failed to run history --top");
+    assert!(output.status.success());
+    let parsed: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&output.stdout)).expect("valid json array");
+    assert!(parsed.is_array());
 }
