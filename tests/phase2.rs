@@ -186,7 +186,10 @@ fn detector_two_tier() {
         DetectionResult::Anomaly {
             nearest_incidents, ..
         } => {
-            assert!(!nearest_incidents.contains(&777), "Exclude IDs outside allowlist");
+            assert!(
+                !nearest_incidents.contains(&777),
+                "Exclude IDs outside allowlist"
+            );
             assert!(nearest_incidents.iter().all(|id| [10, 20].contains(id)));
         }
         DetectionResult::Normal => panic!("Anomaly vector classified as Normal"),

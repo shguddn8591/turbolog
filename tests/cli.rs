@@ -50,7 +50,11 @@ fn pipe_to_scan(input: &str, format: &str) -> (Option<i32>, String, String) {
     pipe_to_scan_args(input, format, &[])
 }
 
-fn pipe_to_scan_args(input: &str, format: &str, extra_args: &[&str]) -> (Option<i32>, String, String) {
+fn pipe_to_scan_args(
+    input: &str,
+    format: &str,
+    extra_args: &[&str],
+) -> (Option<i32>, String, String) {
     let mut cmd = Command::new(binary())
         .arg("scan")
         .arg("--format")
@@ -97,7 +101,11 @@ fn watch_outputs_lines_for_input() {
                  2024-01-01 INFO request received from 192.168.1.1\n\
                  2024-01-01 INFO server started on port 8080\n";
     let (code, stdout, _stderr) = pipe_to_watch(input, &[]);
-    assert_eq!(code, Some(0), "turbolog watch should exit 0 when no anomalies");
+    assert_eq!(
+        code,
+        Some(0),
+        "turbolog watch should exit 0 when no anomalies"
+    );
     let out_lines = stdout.lines().count();
     assert!(
         out_lines >= 3,
@@ -108,7 +116,9 @@ fn watch_outputs_lines_for_input() {
 #[test]
 fn watch_only_anomalies_suppresses_normal_lines() {
     if !models_available() {
-        eprintln!("skipping cli::watch_only_anomalies_suppresses_normal_lines — models not present");
+        eprintln!(
+            "skipping cli::watch_only_anomalies_suppresses_normal_lines — models not present"
+        );
         return;
     }
     let input = "user login OK\nrequest processed in 12ms\n";
@@ -159,7 +169,11 @@ fn scan_text_report_contains_summary() {
     }
     let input = "INFO user login success\n".repeat(5);
     let (code, stdout, _stderr) = pipe_to_scan(&input, "text");
-    assert_eq!(code, Some(0), "turbolog scan should exit 0 when no anomalies");
+    assert_eq!(
+        code,
+        Some(0),
+        "turbolog scan should exit 0 when no anomalies"
+    );
     assert!(
         stdout.contains("Lines processed"),
         "text report should contain 'Lines processed': {stdout}"

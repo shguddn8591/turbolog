@@ -9,8 +9,8 @@
 
 use std::path::PathBuf;
 
-use clap::Parser;
 use clap::CommandFactory;
+use clap::Parser;
 use turbolog::cli::{Cli, Command};
 
 /// Exit 0 — success, no anomalies detected.
@@ -85,7 +85,12 @@ fn run() -> anyhow::Result<i32> {
         }
         Command::Completions { shell } => {
             let shell: clap_complete::Shell = shell.into();
-            clap_complete::generate(shell, &mut Cli::command(), "turbolog", &mut std::io::stdout());
+            clap_complete::generate(
+                shell,
+                &mut Cli::command(),
+                "turbolog",
+                &mut std::io::stdout(),
+            );
             Ok(EXIT_OK)
         }
     }
@@ -183,7 +188,9 @@ fn run_watch_cmd(
 
     let history = HistoryStore::open().ok();
     if !quiet {
-        eprintln!("[turbolog] streaming anomaly detection active (calibrating on first 64 templates)");
+        eprintln!(
+            "[turbolog] streaming anomaly detection active (calibrating on first 64 templates)"
+        );
     }
 
     let stats = turbolog::watch::run_watch(
@@ -222,8 +229,7 @@ fn run_scan_cmd(
     };
 
     let history = HistoryStore::open().ok();
-    let stats =
-        turbolog::scan::run_scan(&mut pipeline, format, llm.as_ref(), history.as_ref())?;
+    let stats = turbolog::scan::run_scan(&mut pipeline, format, llm.as_ref(), history.as_ref())?;
 
     Ok(if stats.anomaly_count > 0 {
         EXIT_ANOMALIES

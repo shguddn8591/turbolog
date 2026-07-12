@@ -149,7 +149,10 @@ fn auto_calibration_then_detection() {
             .ingest_log(&format!("worker {i} heartbeat ok at epoch {i}"))
             .unwrap();
     }
-    assert!(engine.stats().detector_calibrated, "Auto-calibration complete");
+    assert!(
+        engine.stats().detector_calibrated,
+        "Auto-calibration complete"
+    );
     engine.swap_tick().unwrap();
 
     // Populate ring window with sealed vectors so nearest_incidents lookup has context
@@ -275,7 +278,11 @@ fn sealed_wal_leftover_recovery() {
 
     let engine =
         TurboLogEngine::open(test_config(data_dir.clone()), vec![make_embedder(&models)]).unwrap();
-    assert_eq!(engine.stats().pending_window_len, 4, "sealed leftover recovery");
+    assert_eq!(
+        engine.stats().pending_window_len,
+        4,
+        "sealed leftover recovery"
+    );
     // After merge: Leftover file disappears and 4 records are re-persisted to active WAL
     assert!(!data_dir.join("wal-0-sealed-99.bin").exists());
     assert_eq!(

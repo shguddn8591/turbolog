@@ -139,7 +139,10 @@ fn end_to_end_anomaly_detection() {
             nearest_incidents,
         } => {
             assert!(score > 0.5, "score={score}");
-            assert!(!nearest_incidents.is_empty(), "Secured similar context in recent window");
+            assert!(
+                !nearest_incidents.is_empty(),
+                "Secured similar context in recent window"
+            );
             println!("Anomaly detected: score={score:.3}, nearest incidents={nearest_incidents:?}");
         }
         DetectionResult::Normal => panic!("Fatal log classified as Normal"),

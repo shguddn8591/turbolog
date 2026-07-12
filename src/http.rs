@@ -73,9 +73,7 @@ fn authorized(request: &Request, token: &str) -> bool {
     let expected = format!("Bearer {token}");
     request.headers().iter().any(|h| {
         h.field.equiv("Authorization")
-            && bool::from(
-                h.value.as_str().as_bytes().ct_eq(expected.as_bytes()),
-            )
+            && bool::from(h.value.as_str().as_bytes().ct_eq(expected.as_bytes()))
     })
 }
 

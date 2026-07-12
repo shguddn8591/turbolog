@@ -23,8 +23,7 @@ fn main() {
 
     std::fs::create_dir_all(&dir).expect("Failed to create models/");
 
-    const BASE: &str =
-        "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main";
+    const BASE: &str = "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main";
 
     if !model.exists() {
         println!("cargo:warning=Downloading all-MiniLM-L6-v2 model (~86 MB)...");

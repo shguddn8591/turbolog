@@ -57,10 +57,12 @@ fn ensure_models(dir: &Path) -> Result<()> {
         return Ok(());
     }
     std::fs::create_dir_all(dir)?;
-    const BASE: &str =
-        "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main";
+    const BASE: &str = "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main";
     if !model.exists() {
-        eprintln!("[turbolog] First run: downloading model (~86 MB) to {} ...", dir.display());
+        eprintln!(
+            "[turbolog] First run: downloading model (~86 MB) to {} ...",
+            dir.display()
+        );
         download(&format!("{BASE}/onnx/model.onnx"), &model)?;
     }
     if !tokenizer.exists() {
