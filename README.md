@@ -27,6 +27,17 @@ $ tail -f app.log | turbolog watch --only-anomalies
 [ANOMALY 1.08] FATAL segfault in worker thread null pointer dereference
 ```
 
+> **Anomaly ≠ error.** TurboLog flags lines that are *statistically unusual* relative
+> to the baseline it just learned — novel, rare, or off-distribution messages. It does
+> **not** parse severity or understand meaning. Two consequences worth knowing:
+> - A frequent, expected `ERROR` (e.g. a health check that always 500s) becomes part of
+>   the baseline and **won't** be flagged.
+> - An unusual but harmless line (a new deploy banner, a first-time INFO message) **can**
+>   be flagged until it's seen enough to look normal.
+>
+> Think of it as "this doesn't look like your usual traffic," not "this is broken."
+> Use `--explain` when you want a local LLM to judge whether a flagged line actually matters.
+
 **Two AI layers — only one is required:**
 - **MiniLM** (built-in, always on): a 86 MB ONNX model baked into the binary. Powers anomaly detection. No API key, no internet at runtime.
 - **LLM** (optional, `--explain` only): calls your locally running [Ollama](https://ollama.ai) or [LM Studio](https://lmstudio.ai) to explain *why* a line looks anomalous. Zero config — TurboLog auto-detects them.
