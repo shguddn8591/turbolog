@@ -20,6 +20,7 @@ pub static TOKENIZER_BYTES: &[u8] = include_bytes!("../models/tokenizer.json");
 /// When not embedded, looks for model files in (priority order):
 ///   1. `model_dir` (explicit --model-dir or TURBOLOG_MODEL_DIR)
 ///   2. $XDG_DATA_HOME/turbolog/models  (~/.local/share/turbolog/models)
+///
 /// If neither exists, downloads from Hugging Face automatically.
 pub fn make_embedder(_model_dir: &Path) -> Result<Embedder> {
     #[cfg(feature = "embedded-model")]
@@ -56,10 +57,12 @@ fn ensure_models(dir: &Path) -> Result<()> {
         return Ok(());
     }
     std::fs::create_dir_all(dir)?;
-    const BASE: &str =
-        "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main";
+    const BASE: &str = "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main";
     if !model.exists() {
-        eprintln!("[turbolog] First run: downloading model (~86 MB) to {} ...", dir.display());
+        eprintln!(
+            "[turbolog] First run: downloading model (~86 MB) to {} ...",
+            dir.display()
+        );
         download(&format!("{BASE}/onnx/model.onnx"), &model)?;
     }
     if !tokenizer.exists() {
