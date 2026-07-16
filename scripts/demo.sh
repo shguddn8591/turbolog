@@ -12,12 +12,12 @@ set -euo pipefail
 
 # ── Locate the turbolog binary ───────────────────────────────────────────────
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-if command -v turbolog >/dev/null 2>&1; then
-    BIN="turbolog"
-elif [ -x "$ROOT/target/release/turbolog" ]; then
+if [ -x "$ROOT/target/release/turbolog" ]; then
     BIN="$ROOT/target/release/turbolog"
 elif [ -x "$ROOT/target/debug/turbolog" ]; then
     BIN="$ROOT/target/debug/turbolog"
+elif command -v turbolog >/dev/null 2>&1; then
+    BIN="turbolog"
 else
     echo "turbolog not found. Install it (cargo install turbolog) or build it (cargo build)." >&2
     exit 1
