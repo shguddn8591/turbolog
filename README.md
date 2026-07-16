@@ -17,6 +17,17 @@
 TurboLog is a **local-first log anomaly detector** for **terminal-centric developers**.
 Pipe your logs in, get anomalies out — with optional one-line AI explanations from your local Ollama or LM Studio.
 
+<p align="center">
+  <img src="docs/demo.svg" alt="TurboLog live anomaly detection demo" width="720">
+</p>
+
+**Try it in 10 seconds** (from a source checkout):
+
+```bash
+./scripts/demo.sh          # live streaming demo — only anomalies surface
+./scripts/demo.sh explain  # same, plus local LLM explanations
+```
+
 TurboLog learns your normal traffic, then flags the outliers:
 
 ```
@@ -67,7 +78,13 @@ Alternatively, grab a prebuilt binary (no Rust needed) from [Releases](https://g
 
 ## Quick Start
 
-Point TurboLog at your live logs:
+Fastest path — run the bundled demo (generates a realistic stream and pipes it in):
+
+```bash
+./scripts/demo.sh
+```
+
+Or point it at your own live logs:
 
 ```bash
 tail -f /var/log/app.log | turbolog watch --only-anomalies
@@ -75,8 +92,17 @@ tail -f /var/log/app.log | turbolog watch --only-anomalies
 
 > **How detection works:** TurboLog calibrates on your normal traffic first, then
 > flags outliers. `watch` calibrates as a live stream accumulates templates (or after a
-> 500-line warm-up). `scan` reads a batch to EOF — best for a file whose anomalies are
-> *novel* relative to the bulk of the log, since it calibrates on the same batch it scores.
+> 500-line warm-up), which is why the demo streams a baseline before the anomalies.
+> `scan` reads a batch to EOF — best for a file whose anomalies are *novel* relative to
+> the bulk of the log, since it calibrates on the same batch it scores.
+
+### Record your own GIF
+
+```bash
+# using asciinema + agg (https://github.com/asciinema/agg)
+asciinema rec demo.cast -c './scripts/demo.sh'
+agg demo.cast docs/demo.gif
+```
 
 With your own logs:
 
@@ -429,8 +455,6 @@ turbolog scan < build.log || exit 1
 ```
 
 See [docs/CLI.md](docs/CLI.md) for the full terminal-first CLI reference.
-
-A ready-to-run demo script (`scripts/demo.sh`) lands in a follow-up change.
 
 ---
 
