@@ -2970,6 +2970,7 @@ dependencies = [
  "serde",
  "serde_json",
  "subtle",
+ "tempfile",
  "tiny_http",
  "tokenizers",
  "turbovec",

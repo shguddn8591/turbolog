@@ -29,6 +29,15 @@ pub struct HistoryEntry {
     pub explanation: Option<String>,
 }
 
+/// Aggregated anomaly counts per Drain template.
+pub struct TemplateSummary {
+    pub template: String,
+    pub count: u64,
+    pub avg_score: f32,
+    pub last_seen: i64,
+    pub sample_line: String,
+}
+
 pub struct HistoryStore {
     conn: Connection,
 }
@@ -103,6 +112,42 @@ impl HistoryStore {
         }
 
         Ok(entries)
+    }
+
+    /// Top recurring templates in a time window, sorted by frequency descending.
+    pub fn top_templates(&self, since_secs: i64, limit: usize) -> Result<Vec<TemplateSummary>> {
+        let cutoff = now_secs() - since_secs;
+        let limit = limit as i64;
+        let mut stmt = self.conn.prepare(
+            "SELECT template, COUNT(*) AS cnt, AVG(score) AS avg_score, MAX(timestamp) AS last_ts
+             FROM anomalies WHERE timestamp >= ?1
+             GROUP BY template ORDER BY cnt DESC LIMIT ?2",
+        )?;
+        let mut rows = stmt.query(params![cutoff, limit])?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next()? {
+            let template: String = row.get(0)?;
+            let count: i64 = row.get(1)?;
+            let avg_score: f64 = row.get(2)?;
+            let last_seen: i64 = row.get(3)?;
+            let sample_line: String = self
+                .conn
+                .query_row(
+                    "SELECT line FROM anomalies WHERE template = ?1 AND timestamp >= ?2
+                     ORDER BY timestamp DESC LIMIT 1",
+                    params![template, cutoff],
+                    |r| r.get(0),
+                )
+                .unwrap_or_default();
+            out.push(TemplateSummary {
+                template,
+                count: count as u64,
+                avg_score: avg_score as f32,
+                last_seen,
+                sample_line,
+            });
+        }
+        Ok(out)
     }
 
     /// Returns a one-line context string for the given template, e.g.
