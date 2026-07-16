@@ -92,10 +92,10 @@ MODE="${1:-watch}"
 
 case "$MODE" in
 watch | explain)
-    extra=()
-    [ "$MODE" = "explain" ] && extra=(--explain)
+    extra=""
+    [ "$MODE" = "explain" ] && extra="--explain"
     echo "# Live log stream → TurboLog flags anomalies in real time"
-    echo "\$ tail -f app.log | turbolog watch --only-anomalies ${extra[*]}"
+    echo "\$ tail -f app.log | turbolog watch --only-anomalies${extra:+ $extra}"
     echo "# (learning normal traffic, then streaming — only anomalies are shown)"
     echo
     {
@@ -108,7 +108,7 @@ watch | explain)
             printf '%s\n' "$a"
         done
         emit_normal 4
-    } | "$BIN" watch --only-anomalies "${extra[@]}"
+    } | "$BIN" watch --only-anomalies ${extra:+"$extra"}
     ;;
 *)
     echo "Usage: $0 [watch|explain]" >&2
