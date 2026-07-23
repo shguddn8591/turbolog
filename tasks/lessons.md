@@ -1,5 +1,19 @@
 # Lessons
 
+## 2026-07-23 Product focus (CLI-first)
+
+- **Two products in one repo was the real bug:** pipe CLI for developers vs “1M concurrent”
+  observability engine. Docs (SLO, OPERATIONS, k8s) sold the latter while code and adoption
+  only supported the former. **Narrow the product; demote the rest to experimental.**
+- **Lab logs/s ≠ product.** Sharding and µs hit-path benches are interesting engineering; they
+  do not justify multi-replica marketing when `/health` is missing and calibration is frozen.
+- **Novelty ≠ incident.** Keep README/ops language from promising root-cause or calibrated
+  outage probability. `--explain` is optional narration.
+- **Merged stacked PRs that never land on `main` destroy trust.** Track roadmap items as done
+  only when they exist on the default branch.
+- **When rewriting docs, update every surface** (README, todo, CONTRIBUTING, OPERATIONS, SLO,
+  deploy comments, issue templates) or the old 1M narrative will keep leaking.
+
 ## 2026-06-10 Phase 2
 - **Ping-pong window semantics finalized**: The specification does not define the handling of existing data in the write index after a swap.
   Adopted a design of replacing with an empty index after sealing — search snapshot = previously sealed window (10 seconds).
@@ -34,19 +48,21 @@
 - The max ~86ms spike in load test [2] is unrelated to swapping (no swap in that interval) —
   Presumed to be an OS write stall during WAL file growth, 1 in 50k · p99 26µs so acceptable.
 
-## 2026-06-15 Phase 4 Production Hardening (1 Million Concurrent Connections)
+## 2026-06-15 Phase 4 (historical) — production hardening / 1M narrative
+
+> **Status:** Engineering lessons below remain valid for the experimental engine.
+> The **product goal of “1M concurrent connections” is retired** (2026-07-23). Do not cite
+> this section as current roadmap.
+
 - **A single global write lock is the real throughput bottleneck**: Quantitatively proven with loadtest [7] that multi-thread ingestion
   *anti-scales* (lock contention) from 10 threads to 0.86x, justifying sharding. Do not assume it is "fast"
-  without measurement. → Eliminated by independent WAL+index+ring per shard, routing with `id % N`.
+  without measurement. → Mitigated by independent WAL+index+ring per shard, routing with `id % N`.
 - **Setting shard boundaries**: Only WAL/index/ring are sharded; template cache, embedder pool, detector,
   and calibration are kept global. Sharding state-sharing parts (cache hit rate, frozen centroid)
   only increases consistency and memory costs without benefits.
-- **Freeze shared contracts first → parallel implementation**: Fix the metrics module signature first (by myself), then
-  separate the 4 workstreams into non-overlapping file ownerships for parallel execution. If cross-files (detect.rs clippy
-  fixes) are identical changes, 3-way merge resolves automatically, making duplicate allowance simpler.
-- **Stacked PRs**: Sharding and HTTP are stacked on top of the metrics contract (foundation), while deployment and benchmarks are independent from main.
-  When foundation merges, GitHub automatically retargets the stack PR base.
-- **1 Million = single-node optimization × horizontal scaling**: Nodes are stateful due to in-memory index → node pinning with
-  tenant key consistent hash LB + intra-node core sharding. Based on a conservative 30k logs/s/node, 1M → ~44 replicas.
-- **TLS is terminated at ingress**: The app remains plaintext (inside the trusted network). In-process TLS only increases
-  operational complexity. Observability probes (/health, /ready, /metrics) are exempt from authentication.
+- **Freeze shared contracts first → parallel implementation**: Fix the metrics module signature first, then
+  separate workstreams into non-overlapping file ownerships.
+- **Stacked PRs**: Useful for parallel agents — but verify the final merge actually sits on `main`.
+- **1M math was always a stretch**: stateful index + frozen calibration + incomplete HTTP ops ≠ platform.
+  Prefer single-node experimental daemonization only if CLI demand appears.
+- **TLS at ingress** remains fine advice *if* `serve` is ever exposed beyond localhost; keep the app plain HTTP on a trusted network.

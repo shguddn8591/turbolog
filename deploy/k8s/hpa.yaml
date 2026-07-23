@@ -1,27 +1,10 @@
 ---
-# TurboLog HorizontalPodAutoscaler
+# EXPERIMENTAL — retired from product capacity planning.
+# Former “min 6 / max 50 for 1M req/s” targets are intentionally removed.
+# Prefer not applying this file. If you need HPA for a single-node experiment later,
+# start from min=1 / max=2 after /metrics and readiness exist.
 #
-# Target: CPU utilization 70%
-#   CPU is dominated by embedding computations (ONNX inference) and serves as an intuitive scale signal.
-#
-# Custom metric extensibility (comment):
-#   If turbolog_inflight_requests (currently processing requests) is exposed to the HPA custom metrics API
-#   via Prometheus Adapter, it can be added instead of or alongside CPU as follows:
-#
-#   metrics:
-#     - type: Pods
-#       pods:
-#         metric:
-#           name: turbolog_inflight_requests
-#         target:
-#           type: AverageValue
-#           averageValue: "800"   # Average in-flight threshold per replica
-#
-#   This approach is advantageous for proactive scale-out when there are many pending requests even if CPU is low.
-#
-# min 6 / max 50:
-#   min=6 : Ensures at least 2 per AZ based on 3 AZs + satisfies PDB minAvailable=4
-#   max=50: Assumes ~20k req/s throughput per replica based on 1M req/s target
+# This file is kept as a stub so old links do not 404; it is not a supported config.
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
@@ -29,14 +12,14 @@ metadata:
   namespace: turbolog
   labels:
     app.kubernetes.io/name: turbolog
-    app.kubernetes.io/component: hpa
+    app.kubernetes.io/component: hpa-experimental
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
     name: turbolog
-  minReplicas: 6
-  maxReplicas: 50
+  minReplicas: 1
+  maxReplicas: 2
   metrics:
     - type: Resource
       resource:
@@ -44,17 +27,3 @@ spec:
         target:
           type: Utilization
           averageUtilization: 70
-  behavior:
-    scaleUp:
-      stabilizationWindowSeconds: 60
-      policies:
-        - type: Pods
-          value: 4
-          periodSeconds: 60
-    scaleDown:
-      # Scale down slowly to prevent service impact from rapid scaling
-      stabilizationWindowSeconds: 300
-      policies:
-        - type: Pods
-          value: 2
-          periodSeconds: 120

@@ -1,6 +1,7 @@
 ---
-# TurboLog ConfigMap — Non-secret runtime configuration
-# Sensitive values (TURBOLOG_AUTH_TOKEN) are managed in a separate Secret.
+# EXPERIMENTAL ConfigMap for `serve` experiments.
+# TURBOLOG_MAX_INFLIGHT is not enforced by current http.rs — value is documentary only.
+# Sensitive values (TURBOLOG_AUTH_TOKEN) belong in a Secret.
 apiVersion: v1
 kind: ConfigMap
 metadata:
