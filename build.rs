@@ -40,7 +40,13 @@ fn main() {
 
 fn fetch(url: &str, dest: &std::path::Path) {
     let st = std::process::Command::new("curl")
-        .args(["--fail", "--location", "--silent", "--show-error", "-o"])
+        .args([
+            "--fail",
+            "--location",
+            "--progress-bar",
+            "--show-error",
+            "-o",
+        ])
         .arg(dest)
         .arg(url)
         .status()

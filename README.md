@@ -29,7 +29,7 @@ Novelty (distance from calibrated “normal” templates) is highlighted; that i
 ```
 
 **Two layers — only one is required:**
-- **MiniLM** (built-in, always on): an embedded ONNX model; release binaries are typically ~90 MB. Powers novelty / anomaly scoring. No API key; no network needed at runtime after the model is present.
+- **MiniLM** (built-in, always on): an ~86–90 MB ONNX model; release binaries are typically ~90 MB because they include it. Powers novelty / anomaly scoring. No API key; default builds download it once at build time and embed it, while non-embedded builds fetch it on first run. No network is needed at runtime after the model is present.
 - **LLM** (optional, `--explain` only): calls a locally running [Ollama](https://ollama.ai) or [LM Studio](https://lmstudio.ai) to narrate *why* a line looks unusual. Auto-detected. Never required for detection; if unavailable, `--explain` is ignored.
 
 **Product focus:** `watch` · `scan` · `history`.  
@@ -51,8 +51,8 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 cargo install turbolog
 ```
 
-> The first build downloads the embedded MiniLM model and bakes it into the binary
-> (or fetches it on first run if needed). After that, detection runs offline.
+> The first build downloads the embedded MiniLM model (~86–90 MB) and bakes it into the binary.
+> Non-embedded builds fetch it on first run instead. After the model is present, detection runs offline.
 > Default install includes `embedded-model` only — not the HTTP server or TUI.
 
 No Rust toolchain? Use a prebuilt CLI binary instead:
@@ -64,7 +64,7 @@ No Rust toolchain? Use a prebuilt CLI binary instead:
 curl -fsSL https://raw.githubusercontent.com/shguddn8591/turbolog/main/scripts/install.sh | bash
 ```
 
-Release binaries are typically ~90 MB because they include MiniLM. Current release assets cover Linux x86_64/aarch64 and macOS Apple Silicon (`aarch64-macos`).
+Release binaries are typically ~90 MB because they include MiniLM. Current release assets cover Linux x86_64/aarch64 and macOS Apple Silicon (`aarch64-macos`); macOS Intel (`x86_64-macos`) users should install from source with `cargo install turbolog`.
 
 Optional feature builds:
 
@@ -284,6 +284,8 @@ If an LLM is reachable but slow, each explanation request times out after 30 sec
 | Variable | Description |
 |---|---|
 | `TURBOLOG_MODEL_DIR` | Directory containing `model.onnx` and `tokenizer.json` (default: `./models`) |
+| `TURBOLOG_OFFLINE` | For non-embedded builds, set to `1` to fail fast instead of downloading missing runtime models |
+| `TURBOLOG_SKIP_MODEL_DOWNLOAD` | Compile-time only: skip the embedded-model download when you have already supplied `models/model.onnx` and `models/tokenizer.json` |
 | `TURBOLOG_LLM_URL` | LLM base URL override |
 | `TURBOLOG_LLM_MODEL` | LLM model name override |
 | `NO_COLOR` | Disable ANSI colors when set |
@@ -355,11 +357,18 @@ Centroids are **frozen after calibration** (no online re-training). That keeps t
 git clone https://github.com/shguddn8591/turbolog.git
 cd turbolog
 
-# Download the ONNX model (required for embedding)
+# Download the ONNX model (~86–90 MB, required for embedding)
 ./scripts/download_model.sh
 
 # CLI (default)
 cargo build --release
+
+# Offline build after pre-populating ./models
+TURBOLOG_SKIP_MODEL_DOWNLOAD=1 cargo build --release
+
+# Non-embedded build: downloads on first run unless TURBOLOG_MODEL_DIR points
+# at existing files or TURBOLOG_OFFLINE=1 is set
+cargo build --release --no-default-features
 
 # Optional features
 cargo build --release --features tui
