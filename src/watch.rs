@@ -23,6 +23,11 @@ pub struct WatchStats {
     pub anomaly_count: u64,
 }
 
+struct CalibrationDisplay {
+    progress: usize,
+    target: usize,
+}
+
 pub fn run_watch(
     pipeline: &mut LocalPipeline,
     llm: Option<&LlmClient>,
@@ -53,8 +58,10 @@ pub fn run_watch(
                 handle_result(
                     &line,
                     &result,
-                    pipeline.calibration_progress(),
-                    pipeline.calibration_target(),
+                    CalibrationDisplay {
+                        progress: pipeline.calibration_progress(),
+                        target: pipeline.calibration_target(),
+                    },
                     use_color,
                     llm,
                     history,
@@ -74,8 +81,7 @@ pub fn run_watch(
 fn handle_result(
     line: &str,
     result: &LineResult,
-    calibration_progress: usize,
-    calibration_target: usize,
+    calibration: CalibrationDisplay,
     color: bool,
     llm: Option<&LlmClient>,
     history: Option<&HistoryStore>,
@@ -126,10 +132,14 @@ fn handle_result(
         }
         if color {
             println!(
-                "{DIM}[calibrating {calibration_progress}/{calibration_target}]{RESET} {line}"
+                "{DIM}[calibrating {}/{}]{RESET} {line}",
+                calibration.progress, calibration.target
             );
         } else {
-            println!("[calibrating {calibration_progress}/{calibration_target}] {line}");
+            println!(
+                "[calibrating {}/{}] {line}",
+                calibration.progress, calibration.target
+            );
         }
     } else if !opts.only_anomalies {
         println!("{line}");
