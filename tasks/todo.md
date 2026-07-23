@@ -33,7 +33,7 @@
 - [ ] Surface calibration state clearly (`watch`: calibrating → ready; `scan`: small-input rules)
 - [ ] Make `--threshold` and auto threshold understandable in help text / docs
       (score = novelty distance, not probability)
-- [ ] Reduce false novelty on known-benign bursts where cheap heuristics help
+- [x] Reduce false novelty on known-benign bursts where cheap heuristics help
       (e.g. repeated identical templates after calibration)
 - [ ] Persist / show recurring patterns via `history` so repeat anomalies are actionable
 
