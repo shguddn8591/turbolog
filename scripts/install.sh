@@ -22,7 +22,11 @@ detect_target() {
             ;;
         darwin)
             case "$arch" in
-                x86_64)  echo "x86_64-macos" ;;
+                x86_64)
+                    echo "TurboLog does not publish an x86_64-macos release asset yet." >&2
+                    echo "Use the aarch64-macos binary on Apple Silicon, or install from source with: cargo install turbolog" >&2
+                    exit 1
+                    ;;
                 arm64)   echo "aarch64-macos" ;;
                 *)       echo "unsupported arch: $arch" >&2; exit 1 ;;
             esac
@@ -40,7 +44,7 @@ main() {
     echo "Platform: $TARGET"
 
     echo "Fetching latest release version…"
-    VERSION=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \\
+    VERSION=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
         | grep '"tag_name"' | sed 's/.*"tag_name": *"\\(.*\\)".*/\\1/' || true)
 
     if [ -z "$VERSION" ]; then
