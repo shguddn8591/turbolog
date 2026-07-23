@@ -14,6 +14,23 @@ struct ScanEntry {
     result: LineResult,
 }
 
+#[derive(Clone, Copy)]
+enum CalibrationStatus {
+    StreamingTrigger,
+    EofFinalized,
+    NotEnoughData,
+}
+
+impl CalibrationStatus {
+    fn as_json(self) -> &'static str {
+        match self {
+            Self::StreamingTrigger => "streaming_trigger",
+            Self::EofFinalized => "eof_finalized",
+            Self::NotEnoughData => "not_enough_data",
+        }
+    }
+}
+
 pub struct ScanStats {
     pub anomaly_count: usize,
 }
@@ -25,6 +42,8 @@ struct JsonReport<'a> {
     anomalies_total: usize,
     anomaly_rate_pct: f64,
     calibrated: bool,
+    calibration_status: &'static str,
+    effective_threshold: Option<f32>,
     top_anomalies: Vec<JsonAnomaly<'a>>,
 }
 
@@ -62,7 +81,9 @@ pub fn run_scan(
     // on the collected templates, then re-score the lines seen before the detector existed.
     // Uses `rescore` (template -> cached vector) instead of `process` so this doesn't
     // re-feed every line into Drain's stateful tree a second time.
-    if pipeline.finalize() {
+    let was_calibrated = pipeline.calibrated();
+    let calibrated = pipeline.finalize();
+    if calibrated {
         for entry in &mut entries {
             if entry.result.score.is_none() {
                 match pipeline.rescore(&entry.result.template) {
@@ -73,6 +94,14 @@ pub fn run_scan(
             }
         }
     }
+    let calibration_status = if was_calibrated {
+        CalibrationStatus::StreamingTrigger
+    } else if calibrated {
+        CalibrationStatus::EofFinalized
+    } else {
+        CalibrationStatus::NotEnoughData
+    };
+    let effective_threshold = pipeline.effective_threshold();
 
     let total = entries.len();
     let anomalies: Vec<&ScanEntry> = entries.iter().filter(|e| e.result.is_anomaly).collect();
@@ -125,7 +154,9 @@ pub fn run_scan(
                 templates_found: templates.len(),
                 anomalies_total: anomaly_count,
                 anomaly_rate_pct: rate,
-                calibrated: pipeline.calibrated(),
+                calibrated,
+                calibration_status: calibration_status.as_json(),
+                effective_threshold,
                 top_anomalies: top
                     .iter()
                     .zip(explanations.iter())
@@ -146,7 +177,8 @@ pub fn run_scan(
             rate,
             &top,
             &explanations,
-            pipeline.calibrated(),
+            calibration_status,
+            effective_threshold,
         ),
     }
 
@@ -160,17 +192,36 @@ fn print_text_report(
     rate: f64,
     top: &[&ScanEntry],
     explanations: &[Option<String>],
-    calibrated: bool,
+    calibration_status: CalibrationStatus,
+    effective_threshold: Option<f32>,
 ) {
     println!();
     println!("--- TurboLog Scan Report ---");
     println!("Lines processed : {total}");
     println!("Templates found : {templates}");
     println!("Anomalies       : {anomalies} ({rate:.2}%)");
-    if !calibrated {
-        println!(
-            "Note            : Not enough data to calibrate (need at least 8 unique log templates) — scores unavailable"
-        );
+    match calibration_status {
+        CalibrationStatus::StreamingTrigger => {
+            if let Some(threshold) = effective_threshold {
+                println!(
+                    "Calibration     : complete (streaming trigger, threshold={threshold:.3})"
+                );
+            } else {
+                println!("Calibration     : complete (streaming trigger)");
+            }
+        }
+        CalibrationStatus::EofFinalized => {
+            if let Some(threshold) = effective_threshold {
+                println!("Calibration     : complete (EOF finalize, threshold={threshold:.3})");
+            } else {
+                println!("Calibration     : complete (EOF finalize)");
+            }
+        }
+        CalibrationStatus::NotEnoughData => {
+            println!(
+                "Calibration     : incomplete (need at least 8 unique log templates at EOF; scores unavailable)"
+            );
+        }
     }
     if top.is_empty() {
         println!();

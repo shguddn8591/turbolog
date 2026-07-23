@@ -189,7 +189,7 @@ fn run_watch_cmd(
     let history = HistoryStore::open().ok();
     if !quiet {
         eprintln!(
-            "[turbolog] streaming anomaly detection active (calibrating on first 64 templates)"
+            "[turbolog] streaming anomaly detection active (calibrating: 64 templates or 500 lines with >=3 templates)"
         );
     }
 

@@ -41,8 +41,8 @@ turbolog history --since 24h --template "timeout"
 
 ### Calibration & scores
 
-- `watch` calibrates on early unique templates (or a line-budget fallback on low-cardinality streams).
-- `scan` can finalize calibration at EOF if at least 8 distinct templates were seen.
+- `watch` starts scoring after 64 distinct templates, or after 500 input lines if at least 3 distinct templates were seen.
+- `scan` uses the same streaming triggers, then can finalize at EOF if at least 8 distinct templates were seen.
 - **Score = novelty distance** from frozen centroids, not P(incident).
 - Centroids stay frozen for the process lifetime — restart the CLI (or raise `--threshold`) if the log regime changes a lot.
 

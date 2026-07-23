@@ -50,12 +50,21 @@ pub fn run_watch(
                 if result.is_anomaly {
                     stats.anomaly_count += 1;
                 }
-                handle_result(&line, &result, use_color, llm, history, &opts);
+                handle_result(
+                    &line,
+                    &result,
+                    pipeline.calibration_progress(),
+                    pipeline.calibration_target(),
+                    use_color,
+                    llm,
+                    history,
+                    &opts,
+                );
             }
             Err(e) => eprintln!("turbolog: embedding error: {e}"),
         }
         if !opts.quiet && !was_calibrated && pipeline.calibrated() {
-            print_calibration_complete(use_color);
+            print_calibration_complete(use_color, pipeline.effective_threshold());
         }
     }
 
@@ -65,6 +74,8 @@ pub fn run_watch(
 fn handle_result(
     line: &str,
     result: &LineResult,
+    calibration_progress: usize,
+    calibration_target: usize,
     color: bool,
     llm: Option<&LlmClient>,
     history: Option<&HistoryStore>,
@@ -109,10 +120,16 @@ fn handle_result(
         if opts.only_anomalies {
             return;
         }
+        if opts.quiet {
+            println!("{line}");
+            return;
+        }
         if color {
-            println!("{DIM}[calibrating]{RESET} {line}");
+            println!(
+                "{DIM}[calibrating {calibration_progress}/{calibration_target}]{RESET} {line}"
+            );
         } else {
-            println!("[calibrating] {line}");
+            println!("[calibrating {calibration_progress}/{calibration_target}] {line}");
         }
     } else if !opts.only_anomalies {
         println!("{line}");
@@ -120,10 +137,15 @@ fn handle_result(
 }
 
 /// Prints a one-time status line to stderr when calibration completes.
-pub fn print_calibration_complete(use_color: bool) {
+pub fn print_calibration_complete(use_color: bool, threshold: Option<f32>) {
+    let suffix = threshold
+        .map(|value| format!(" (threshold={value:.3})"))
+        .unwrap_or_default();
     if use_color {
-        eprintln!("{YELLOW}[turbolog] calibration complete — anomaly detection active{RESET}");
+        eprintln!(
+            "{YELLOW}[turbolog] calibration complete — anomaly detection active{suffix}{RESET}"
+        );
     } else {
-        eprintln!("[turbolog] calibration complete — anomaly detection active");
+        eprintln!("[turbolog] calibration complete — anomaly detection active{suffix}");
     }
 }
