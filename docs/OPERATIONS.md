@@ -1,296 +1,173 @@
 # TurboLog Operations Guide
 
-> Version: 0.2.0 | Last Modified: 2026-06-18
+> Version: 0.3.0 | Last Modified: 2026-07-23  
+> **Audience:** people running the **CLI** day to day, plus anyone poking at the **experimental** `serve` feature.
+
+TurboLog’s supported product is a **local pipe CLI** (`watch` / `scan` / `history`).
+It is **not** a production multi-replica observability platform. Older “1M concurrent connections”
+topology docs are retired; do not use them as deployment guidance.
 
 ---
 
 ## Table of Contents
 
-1. [1 Million Concurrent Connections Topology](#1-1-million-concurrent-connections-topology)
-2. [Environment Variables Table](#2-environment-variables-table)
-3. [Endpoints Table](#3-endpoints-table)
-4. [TLS and Network Security](#4-tls-and-network-security)
-5. [Scaling and Rollout](#5-scaling-and-rollout)
-6. [Observability](#6-observability)
-7. [Graceful Shutdown](#7-graceful-shutdown)
-8. [Backup and Recovery](#8-backup-and-recovery)
+1. [CLI operations (supported)](#1-cli-operations-supported)
+2. [Experimental `serve` (honest status)](#2-experimental-serve-honest-status)
+3. [Environment variables](#3-environment-variables)
+4. [Data & privacy](#4-data--privacy)
+5. [Deploy scaffolding](#5-deploy-scaffolding)
+6. [When to escalate to a real observability stack](#6-when-to-escalate-to-a-real-observability-stack)
 
 ---
 
-## 1. 1 Million Concurrent Connections Topology
+## 1. CLI operations (supported)
 
-### Core Architecture Principles
-
-TurboLog node is a **stateful-lite** service that holds an **in-memory index (arc-swap)**.
-Random LB (Round Robin) breaks index consistency as the same log stream is distributed across multiple nodes.
-Therefore, **collection agents/clients are pinned to a specific replica with a consistent hash based on a key (tenant ID or stream ID)**.
-
-### Horizontal Scaling Calculation
-
-```text
-1,000,000 concurrent requests/s
-  ÷ Throughput per replica (e.g., 20,000 req/s, based on TURBOLOG_EMBEDDERS=4)
-  = 50 replicas (HPA max)
-```
-
-Each replica internally operates `TURBOLOG_EMBEDDERS` number of embedding workers in parallel.
-That is, **Total Throughput = N replicas × Embedding workers per replica × Embedder processing speed**.
-
-### ASCII Architecture Diagram
-
-```text
-Client/Collection Agent (Log Source)
-        │
-        ▼
-┌─────────────────────────────────────────────┐
-│         External Load Balancer / Ingress    │
-│   Consistent hash routing (hash_key = tenant_id) │
-│   TLS Termination ← Handled here only, plain text inside app │
-└────────────┬─────────────┬──────────────────┘
-             │             │          ...
-             ▼             ▼
-     ┌──────────┐   ┌──────────┐   ┌──────────┐
-     │ TurboLog │   │ TurboLog │   │ TurboLog │   (6~50 replicas)
-     │ Pod #0   │   │ Pod #1   │   │ Pod #N   │
-     │          │   │          │   │          │
-     │ shard A  │   │ shard B  │   │ shard C  │   ← Tenant/Stream Shard
-     │          │   │          │   │          │
-     │ [embed0] │   │ [embed0] │   │ [embed0] │
-     │ [embed1] │   │ [embed1] │   │ [embed1] │   ← In-node embedder parallelization
-     │ [embed2] │   │ [embed2] │   │ [embed2] │
-     │          │   │          │   │          │
-     │ /data    │   │ /data    │   │ /data    │   ← WAL + .tvim (Node local)
-     └──────────┘   └──────────┘   └──────────┘
-             │             │          ...
-             ▼             ▼
-     ┌──────────────────────────────────┐
-     │       Prometheus / Grafana       │
-     │  (Scrape: /metrics each pod)     │
-     └──────────────────────────────────┘
-```
-
-### Consistent Hash LB Setup Example (Nginx Ingress)
-
-```nginx
-# nginx.conf or Ingress annotation
-upstream turbolog {
-    hash $http_x_tenant_id consistent;
-    server turbolog-0.turbolog:8087;
-    server turbolog-1.turbolog:8087;
-    # ...
-}
-```
-
-When using Envoy: `hash_policy` → `header: x-tenant-id`.
-
----
-
-## 2. Environment Variables Table
-
-| Variable Name | Default Value | Required | Description |
-|--------|--------|------|------|
-| `TURBOLOG_PORT` | `8087` | No | HTTP listen port |
-| `TURBOLOG_DATA_DIR` | `./data` | No | WAL/Index snapshot path. PVC mount recommended |
-| `TURBOLOG_MODEL_DIR` | `./models` | Yes* | `model.onnx`, `tokenizer.json` location. Injected via initContainer |
-| `TURBOLOG_EMBEDDERS` | `2` | No | ONNX embedding worker count. Increasing it uses more Memory/CPU (~90 MB per session) |
-| `TURBOLOG_AUTH_TOKEN` | _(None)_ | No | Bearer token. If set, all requests require `Authorization: Bearer <token>` |
-| `TURBOLOG_MAX_INFLIGHT` | _(Unlimited)_ | No | Max concurrent processing requests. Returns 503 if exceeded (Backpressure) |
-
-> *If files are missing in the `TURBOLOG_MODEL_DIR` path, embedding will fail. In Kubernetes, the initContainer fills the files before the main container starts.
-
----
-
-## 3. Endpoints Table
-
-| Path | Method | Auth | Description | Response Example |
-|------|--------|------|------|-----------|
-| `/logs` | POST | Required* | Ingests a batch of log lines. Body: `{"logs": ["line1", ...]}`. Max 1 MiB | `{"results": [...]}` |
-| `/search` | POST | Required* | Vector similarity search. Body: `{"query": "...", "k": 5}` | `{"results": [...]}` |
-| `/stats` | GET | Required* | Engine stats (Ingest count, index size, etc.) | `{...stats...}` |
-| `/health` | GET | No | Liveness probe. 200 if app process is normal | `{"status":"ok"}` |
-| `/ready` | GET | No | Readiness probe. 200 if model load is complete, 503 if preparing | `{"status":"ready"}` |
-| `/metrics` | GET | No | Prometheus text format metrics | `# HELP ...` |
-
-> *Auth is required if `TURBOLOG_AUTH_TOKEN` is set. If not set, all paths can be accessed without auth.
->
-> **Caution**: `/health`, `/ready`, `/metrics` need to be added in the WS3 (http.rs hardening) task.
-> Currently, `http.rs` only has `/logs`, `/search`, and `/stats` implemented.
-
----
-
-## 4. TLS and Network Security
-
-**TLS termination is handled at the Ingress or external Load Balancer.**
-The TurboLog app communicates only in plain text HTTP (port 8087) and assumes a trusted network inside the cluster.
-
-- **Ingress → Pod** segment: Cluster internal plain text (Trusted network)
-- **External → Ingress** segment: TLS 1.2+ (Ingress controller manages certificates)
-- If mTLS is required, configure it with the Istio/Linkerd sidecar pattern.
-
-```text
-Client ─── TLS ─── [Ingress / ELB] ─── HTTP ─── TurboLog Pod
-              (443)                         (8087)
-```
-
----
-
-## 5. Scaling and Rollout
-
-### Rolling Update
+### Typical workflows
 
 ```bash
-# Update image
-kubectl -n turbolog set image deployment/turbolog turbolog=registry.example.com/turbolog:0.2.0
+# Live triage while developing
+tail -f /var/log/app.log | turbolog watch
+docker logs -f my-app 2>&1 | turbolog watch --only-anomalies
 
-# Check rollout status
-kubectl -n turbolog rollout status deployment/turbolog
+# Batch review / CI artifact
+turbolog scan --format json < fail.log > anomalies.json
 
-# Rollback on issue
-kubectl -n turbolog rollout undo deployment/turbolog
+# Optional narration (local LLM only)
+turbolog scan --explain < fail.log
+
+# Past hits on this machine
+turbolog history --since 24h --template "timeout"
 ```
 
-During a rolling update, PDB (`minAvailable: 4`) guarantees at least 4 replicas, so
-with 6 replicas, a maximum of 2 are sequentially replaced at a time.
+### Calibration & scores
 
-### Manual Scale
+- `watch` calibrates on early unique templates (or a line-budget fallback on low-cardinality streams).
+- `scan` can finalize calibration at EOF if at least 8 distinct templates were seen.
+- **Score = novelty distance** from frozen centroids, not P(incident).
+- Centroids stay frozen for the process lifetime — restart the CLI (or raise `--threshold`) if the log regime changes a lot.
 
-```bash
-# Temporary scale out (Preparing for traffic surge)
-kubectl -n turbolog scale deployment/turbolog --replicas=20
+### Exit codes
 
-# Auto-return after releasing HPA override
-kubectl -n turbolog patch hpa turbolog -p '{"spec":{"minReplicas":6}}'
-```
+| Code | Meaning |
+|------|---------|
+| `0` | Success, no anomalies |
+| `1` | Anomalies detected (`watch` / `scan`) |
+| `2` | Runtime / usage error |
 
-### Check HPA Status
+Useful for CI: fail the job when `scan` exits `1`, or parse `--format json` instead.
 
-```bash
-kubectl -n turbolog get hpa turbolog -w
-```
+### History database
+
+Path (Linux XDG-style): `~/.local/share/turbolog/history.db` (SQLite).
+
+- Written when anomalies are detected in `watch` / `scan`.
+- Local to the machine; not a multi-user store.
+- Safe to delete if you want a clean slate (you lose recurrence context).
+
+### Model files
+
+Detection needs `model.onnx` + `tokenizer.json` (all-MiniLM-L6-v2).
+
+- Default `cargo install` / embedded-model builds bake or fetch these.
+- Override with `TURBOLOG_MODEL_DIR`.
+- Offline builds: set `TURBOLOG_SKIP_MODEL_DOWNLOAD=1` at compile time and supply models yourself (`./scripts/download_model.sh` when online).
+
+### Local LLM (`--explain`)
+
+- Optional. Detection never depends on it.
+- Auto-detect order: `TURBOLOG_LLM_URL` → Ollama `:11434` → LM Studio `:1234`.
+- Explain requests time out (tens of seconds); on failure the anomaly line still prints without a footer.
+- Treat explanations as **unverified hints**, not root-cause truth.
 
 ---
 
-## 6. Observability
+## 2. Experimental `serve` (honest status)
 
-### Prometheus Scrape Configuration
+Build with `--features server`. Default bind is localhost-oriented (`TURBOLOG_BIND`, `TURBOLOG_PORT`).
 
-Each pod has the `prometheus.io/scrape: "true"` annotation.
-It exposes metrics in Prometheus text format at the `/metrics` endpoint.
+### What works today
 
-```yaml
-# prometheus.yml (scrape_config example, based on annotation)
-scrape_configs:
-  - job_name: turbolog
-    kubernetes_sd_configs:
-      - role: pod
-    relabel_configs:
-      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
-        action: keep
-        regex: "true"
-      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
-        target_label: __metrics_path__
-      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_port]
-        target_label: __address__
-        regex: (.+)
-        replacement: ${1}:8087
-```
+| Path | Method | Notes |
+|------|--------|--------|
+| `/logs` | POST | Batch ingest `{"logs":[...]}` (1 MiB body cap) |
+| `/search` | POST | Semantic search `{"query","k"}` |
+| `/stats` | GET | Engine counters |
 
-### Core Metrics
+Optional `TURBOLOG_AUTH_TOKEN` → require `Authorization: Bearer <token>` (constant-time compare).
 
-| Metric Name | Type | Description | Alert Recommended Threshold |
-|--------|------|------|-----------------|
-| `turbolog_ingested_total` | Counter | Total ingested logs | — |
-| `turbolog_inflight_requests` | Gauge | Currently processing requests | > `TURBOLOG_MAX_INFLIGHT × 0.8` |
-| `turbolog_ingest_latency_seconds` | Histogram | Ingest processing latency. p99 based | p99 > 200ms |
-| `turbolog_http_5xx_total` | Counter | HTTP 5xx response count | > 10 per min |
-| `turbolog_cache_hit_rate` | Gauge | Embedding cache hit rate (0~1) | < 0.5 (Cache efficiency drop) |
-| `turbolog_anomaly_detections_total` | Counter | Anomaly detection occurrences | — |
+### What does **not** work yet (do not pretend otherwise)
 
-### Recommended Grafana Dashboard Panels
+| Claim in older docs / manifests | Reality |
+|----------------------------------|---------|
+| `GET /health`, `/ready`, `/metrics` | **Not implemented** in `http.rs` |
+| `TURBOLOG_MAX_INFLIGHT` backpressure | **Not wired** |
+| Graceful SIGTERM → final `swap_tick` | **Not implemented** |
+| Kubernetes probes in `deploy/k8s` | **Will fail** against current binary |
+| Multi-replica consistent-hash mesh | **Unsupported product** |
 
-1. **Ingest Throughput** (ingested_total rate 1m)
-2. **In-Flight Requests** (inflight gauge)
-3. **Latency Distribution** (ingest_latency p50/p95/p99)
-4. **Error Rate** (5xx rate / total request rate)
-5. **Cache Hit Rate**
-6. **Replica Count** (kube_deployment_status_replicas)
+`src/metrics.rs` exists as an in-process registry; it is **not** exposed over HTTP until someone lands that work under the experimental bar in `tasks/todo.md`.
+
+### Intended niche (if revived)
+
+Single-node / trusted-network daemonization of **one** log stream or host — e.g. local compose next to an app — **after** health endpoints exist. Not a cluster-wide log brain.
 
 ---
 
-## 7. Graceful Shutdown
+## 3. Environment variables
 
-TurboLog gracefully shuts down in the following order upon receiving a SIGTERM:
+### CLI
 
-```text
-SIGTERM Received
-    │
-    ├─ 1. Stop accepting new requests (Close tiny_http server)
-    │
-    ├─ 2. Wait for in-progress requests to complete (Max terminationGracePeriodSeconds=30s)
-    │
-    ├─ 3. Execute last swap_tick (Index snapshot + WAL flush)
-    │
-    └─ 4. Process termination
-```
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `TURBOLOG_MODEL_DIR` | `./models` | ONNX + tokenizer directory |
+| `TURBOLOG_LLM_URL` | _(auto)_ | OpenAI-compatible base URL |
+| `TURBOLOG_LLM_MODEL` | _(auto)_ | Model name for `/v1/chat/completions` |
+| `NO_COLOR` | unset | Disable ANSI colors when set |
 
-Kubernetes removes the pod from the Service endpoints before sending SIGTERM, so
-wait for the endpoint propagation to complete with `preStop: sleep 5`.
+### `serve` (experimental)
 
-**Force Kill Prevention**: If shutdown is not completed within `terminationGracePeriodSeconds: 30`,
-SIGKILL is sent. In high throughput environments, consider increasing this value to 60 seconds.
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `TURBOLOG_PORT` | `8087` | Listen port |
+| `TURBOLOG_BIND` | `127.0.0.1` | Bind address |
+| `TURBOLOG_DATA_DIR` | `./data` | WAL / chunks |
+| `TURBOLOG_MODEL_DIR` | `./models` | Models |
+| `TURBOLOG_EMBEDDERS` | `2` | ONNX sessions (~90 MB each) |
+| `TURBOLOG_AUTH_TOKEN` | unset | Optional bearer token |
 
 ---
 
-## 8. Backup and Recovery
+## 4. Data & privacy
 
-### Storage File Structure
+- **Local-first:** anomaly detection does not call a cloud API.
+- **Model download** may hit the network at build or first run (Hugging Face / configured URL) unless you pre-provision models and skip download.
+- **`--explain`** sends anomalous lines to whatever LLM URL you configured (often localhost).
+- **History DB** retains anomaly text/templates on disk — treat like any other local log derivative (permissions, disk encryption, secrets in logs).
 
-```text
-/data/
-  ├── wal-<shard_id>.wal      # Write-Ahead Log (Binary)
-  └── index-<shard_id>.tvim   # Index snapshot (Serialized vector index)
-```
+---
 
-### Backup Procedure
+## 5. Deploy scaffolding
 
-```bash
-# 1. Select target pod
-POD=$(kubectl -n turbolog get pods -l app.kubernetes.io/name=turbolog -o name | head -1)
+`deploy/docker-compose.yml` and `deploy/k8s/*` are **experimental scaffolding** retained for contributors exploring `serve`. They are **not** a supported production topology. Start from [`deploy/README.md`](../deploy/README.md).
 
-# 2. Compress and copy WAL + Index snapshot
-kubectl -n turbolog exec "$POD" -- tar czf - /data | \
-  gzip > "turbolog-backup-$(date +%Y%m%d-%H%M%S).tar.gz"
+Before using them even locally:
 
-# 3. Upload to remote storage (e.g., S3)
-aws s3 cp turbolog-backup-*.tar.gz s3://my-bucket/turbolog-backups/
-```
+1. Build an image with `--features server`.
+2. Replace placeholder registry/model URLs.
+3. Remove or rewrite healthchecks/probes until `/health` exists — current compose `healthcheck` and k8s probes target missing routes.
+4. Prefer binding to localhost or a private network; terminate TLS at a reverse proxy if you expose beyond the host.
 
-When using PVC, Snapshot (VolumeSnapshot) API or Cloud Storage snapshot is recommended.
+There is no supported guide for HPA max=50, AZ anti-affinity, or “1M req/s” sizing. Those targets are out of product scope.
 
-### Recovery Procedure
+---
 
-```bash
-# 1. Stop pods (replicas=0)
-kubectl -n turbolog scale deployment/turbolog --replicas=0
+## 6. When to escalate to a real observability stack
 
-# 2. Extract backup and copy to PVC or emptyDir
-# (Use separate recovery pod or kubectl cp)
+Use TurboLog for **interactive triage** and light scripting. Reach for Loki/ELK/Datadog/etc. when you need:
 
-# 3. Restart pods
-kubectl -n turbolog scale deployment/turbolog --replicas=6
+- multi-tenant retention and search across a fleet
+- SLO alerting on known failure modes
+- RBAC, audit, compliance pipelines
+- high-availability ingest
 
-# 4. Check normal startup
-kubectl -n turbolog rollout status deployment/turbolog
-kubectl -n turbolog logs -l app.kubernetes.io/name=turbolog --tail=50
-```
-
-### Recovery Time Objective (RTO)
-
-| Scenario | Estimated RTO |
-|----------|----------|
-| Pod restart (emptyDir, index rebuild) | Proportional to WAL size, typically 30~120s |
-| PVC snapshot recovery (Same AZ) | 5~15 mins |
-| Full cluster rebuild | 30 mins~1 hour (Includes model download) |
-
-> **Note**: TurboLog's in-memory index can be rebuilt by replaying the WAL.
-> Adjust the WAL retention period according to disk capacity and RTO goals.
+TurboLog’s frozen-centroid novelty screen is a poor fit for those jobs; don’t stretch it.

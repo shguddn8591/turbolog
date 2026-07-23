@@ -1,76 +1,83 @@
-# TurboLog SLO (Service Level Objectives)
+# TurboLog SLO / performance notes
 
-> Performance/availability targets and measured basis for operating a service with 1M concurrent connections.
-> Measurement environment: **Apple M5 (10-core) / 32GB RAM / rustc 1.95.0 / release(LTO)**, single node.
+> Last updated: 2026-07-23  
+> **Scope:** what we actually care about for the **CLI-first** product, plus archived
+> single-node engine microbench numbers for the experimental `serve` path.
+>
+> This document is **not** a promise of multi-replica “1M concurrent connections”
+> capacity. That goal is retired from the product roadmap (`tasks/todo.md`).
 
-## 1. Objectives (SLO)
+---
 
-| Item | Target | Measured (Single Node) | Remarks |
-|---|---|---|---|
-| Ingestion throughput (Cache hit) | ≥ 30,000 logs/s/node | **52,800 logs/s** | Template cache hit path |
-| Ingestion latency p50 | ≤ 100µs | **15.5µs** | |
-| Ingestion latency p99 | ≤ 1ms | **29.6µs** | |
-| Ingestion latency max | ≤ 100ms | 87.8ms | OS write stall during WAL growth (1 in 50k) |
-| Search latency p50 (including embedding) | ≤ 15ms | **8.9ms** | Embedding (ONNX) is dominant |
-| Search latency p99 (including embedding) | ≤ 20ms | **11.0ms** | |
-| Embedding throughput (Cache miss cap) | ≥ 100 embeds/s/embedder | **136 embeds/s** | ONNX MiniLM-L6-v2 CPU |
-| HTTP /logs throughput (Batch 10) | ≥ 30,000 logs/s/node | **42,200 logs/s** | 4 clients |
-| Miss storm resilience (Hit path) | ≥ 30,000 logs/s | **57,900 logs/s** | Hit path is non-blocking even during new template storms |
-| Cache hit rate (Normal traffic) | ≥ 0.99 | **0.9994** | |
-| Availability | ≥ 99.9% | — | Achieved via multi-replica + PDB (production) |
+## 1. Product SLOs (CLI — the bar that matters)
 
-## 2. Multi-thread Scalability (Core)
+These are qualitative targets for the supported surface (`watch` / `scan` / `history`).
+They are not yet continuously enforced in CI as numeric gates; treat them as engineering intent.
 
-Scalability when N threads call `ingest_log` simultaneously on the same node:
+| Item | Target | Notes |
+|------|--------|--------|
+| Time-to-first-useful-output on a small `scan` | Seconds, not minutes | After model is on disk |
+| Cold start with missing model | Clear progress / error; no silent hang | Download or point `TURBOLOG_MODEL_DIR` |
+| `watch` calibration visibility | User can tell calibrating vs detecting | Status lines / completion signal |
+| Cache-hit line handling | Feels instant on a laptop | Dominant path after templates repeat |
+| Cache-miss embedding | Acceptable interactive latency on CPU | MiniLM ONNX; expect ms–tens of ms |
+| `--explain` failure mode | Anomaly still printed; explain omitted | LLM never required for detection |
+| Exit codes | Stable `0` / `1` / `2` contract | Safe for scripts and CI |
+| History durability | Survives process exit on local disk | SQLite under XDG data dir |
 
-| threads | logs/s | scale vs 1T |
-|---|---|---|
-| 1 | 64,550 | 1.00x |
-| 2 | 57,697 | 0.89x |
-| 4 | 56,465 | 0.87x |
-| 10 | 55,549 | 0.86x |
+**Non-goals for CLI SLOs:** fleet-wide availability %, multi-tenant p99 ingest, HPA behavior.
 
-**Interpretation**: In the `main` baseline (unsharded) code, a single global write lock (`wal: Mutex<Wal>`) serializes all ingestions, so throughput does not increase with more threads (it slightly drops due to lock contention). This bottleneck is removed in the **WS1 Sharded Ingestion Engine** (`feat/sharded-engine`, independent WAL/index per shard, `id % N` routing). After sharding, proportional scaling to the number of cores is expected.
+---
 
-## 3. Measurement Method (Reproduction)
+## 2. Algorithm expectations (honest limits)
+
+| Behavior | Expectation |
+|----------|-------------|
+| What we flag | Novelty vs early calibrated templates |
+| What we do **not** claim | Calibrated P(outage), root-cause certainty |
+| Drift | Frozen centroids → long sessions with regime change may need restart / `--threshold` |
+| `--explain` text | Best-effort local LLM prose; may be wrong |
+
+If these limits are unacceptable for your use case, TurboLog is the wrong tool — use metrics/traces and a real log platform.
+
+---
+
+## 3. Archived: single-node engine microbenches (`--features server`)
+
+Measured previously on a high-end Apple Silicon laptop with a release(LTO) build.
+Useful as a **rough ceiling** for the experimental HTTP engine’s *cache-hit* path — **not**
+a capacity plan for production clusters.
+
+| Item | Historical measurement | Remarks |
+|------|------------------------|---------|
+| Ingestion throughput (cache hit) | ~50k+ logs/s/node | Template cache hit path |
+| Ingestion latency p50 / p99 | tens of µs | Hit path |
+| Embedding throughput (miss) | ~100+ embeds/s/embedder | CPU MiniLM; miss storms hurt |
+| HTTP `/logs` batch throughput | tens of k logs/s | Lab clients; not an SLO commitment |
+
+Reproduce locally (requires models + `server` feature):
 
 ```bash
-# Model preparation (First time only)
 ./scripts/download_model.sh
-
-# Load test (Outputs items [1]~[7] from the table above)
-cargo run --release --example loadtest
-
-# Micro benchmark (Model-independent hot paths: parse/cache/detect/index)
-cargo bench
+cargo run --release --example loadtest --features server
+cargo bench --features server
 ```
 
-`cargo bench` measures 4 groups in `benches/throughput.rs`:
-- `template_parse` — Drain parsing throughput
-- `cache_lookup` — Template cache hit lookup
-- `anomaly_detect` — K-centroid Tier 1 distance/decision
-- `index_ingest_search` — turbovec index ingest/search
+`cargo bench` groups in `benches/throughput.rs`: template parse, cache lookup,
+anomaly distance, index ingest/search.
 
-## 4. 1M Concurrent Connections Capacity Estimation
+### Scalability footnote (why we do not sell “1M”)
 
-If we **conservatively set the single node ingestion throughput to 30,000 logs/s/node**:
+Historical load tests showed a global WAL lock **anti-scaling** under many threads;
+sharding mitigated that *inside one process*. That still does not make TurboLog a
+horizontally scaled observability product: the index is stateful, calibration is frozen,
+and HTTP ops endpoints required for k8s are incomplete. Do not convert lab logs/s into
+replica math for marketing.
 
-```
-Required replicas = Target throughput / Throughput per node
-```
+---
 
-| Target Ingestion Throughput | Required Replicas (30k/node) | Recommended (30% Margin) |
-|---|---|---|
-| 300,000 logs/s | 10 | 13 |
-| 1,000,000 logs/s | 34 | 44 |
-| 3,000,000 logs/s | 100 | 130 |
+## 4. How we will evolve this doc
 
-- **Horizontal scaling premise**: Clients/collection agents are pinned to a specific replica via consistent hashing LB based on tenant/stream keys (since the per-node in-memory index is stateful). The interior of the node is sharded again by the number of cores (WS1).
-- HPA (`deploy/k8s/hpa.yaml`) automatically scales from min 6 / max 50 based on 70% CPU, and can be scaled with the `turbolog_inflight_requests` custom metric.
-- Refer to `docs/OPERATIONS.md` for detailed topology and operational procedures.
-
-## 5. Limitations and Assumptions
-
-- Embeddings (cache misses) have an upper limit of ~136 embeds/s per node due to CPU ONNX inference. In normal operation, misses are rare with a cache hit rate ≥0.99, but during a storm of new templates, the miss path can become a bottleneck (hit path remains non-blocking). If more miss throughput is needed, increase `TURBOLOG_EMBEDDERS` (memory ~90MB/embedder) or horizontally scale the embedder as a separate worker.
-- Search latency is dominated by embedding time. Further reduction is possible with query embedding caching/pre-calculation.
-- Max ingestion latency spikes (~87ms, 1 in 50k) are assumed to be OS write stalls during WAL file growth and do not impact p99.
+- Prefer tightening **§1 CLI SLOs** with real measurements from `watch`/`scan` on commodity laptops.
+- Keep §3 as archaeology / experimental engine notes.
+- Reject PRs that reintroduce “1M concurrent connections” targets without an explicit product decision to change `tasks/todo.md`.

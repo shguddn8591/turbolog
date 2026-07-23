@@ -1,18 +1,16 @@
 ---
-# TurboLog Deployment
+# EXPERIMENTAL scaffolding — not supported production.
+# TurboLog product = local CLI. These manifests assume a future `serve` with /health,/ready,/metrics
+# that does NOT exist yet. Probes below will fail against the current binary.
+# See docs/OPERATIONS.md and tasks/todo.md.
 #
-# Design decisions:
-#   - TurboLog is a stateful-lite service with an in-memory index (arc-swap based).
-#     Each replica is responsible for an independent index shard, and clients are routed
-#     to the same replica using a consistent hash LB (e.g., Nginx/Envoy's hash_policy).
-#   - The WAL (.wal) and index snapshots (.tvim) are written to the /data volume.
-#     For short-term operations, emptyDir (node local) is sufficient, but replace with PVC if persistence is needed.
-#   - Model files (model.onnx, tokenizer.json) are downloaded by an initContainer into a /models emptyDir.
-#     This keeps the image lightweight compared to baking them in.
-#   - resources.limits.memory calculation basis:
-#       2 embedders * ~90 MB = ~180 MB
-#       Index + WAL buffer + Heap ≈ 300 MB
-#       Total ≈ 512 MB (768 Mi recommended including margin)
+# TurboLog Deployment (single-node experiment only; do not treat replica counts as capacity planning)
+#
+# Design notes (if you insist on trying this locally):
+#   - Stateful-lite in-memory index — do not round-robin the same stream across pods.
+#   - WAL / .tvim on /data (emptyDir loses state on restart).
+#   - Models via initContainer or PVC into /models.
+#   - Memory rough guide: 2 embedders × ~90 MB + index/WAL ≈ 512–768 Mi.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -20,15 +18,16 @@ metadata:
   namespace: turbolog
   labels:
     app.kubernetes.io/name: turbolog
-    app.kubernetes.io/version: "0.1.0"
-    app.kubernetes.io/component: engine
+    app.kubernetes.io/version: "0.3.0-experimental"
+    app.kubernetes.io/component: engine-experimental
   annotations:
-    # Prometheus scrape settings — Works with this annotation when ServiceMonitor is not used
-    prometheus.io/scrape: "true"
-    prometheus.io/port: "8087"
-    prometheus.io/path: "/metrics"
+    # /metrics is NOT implemented yet — leave scrape off until it is
+    # prometheus.io/scrape: "true"
+    # prometheus.io/port: "8087"
+    # prometheus.io/path: "/metrics"
 spec:
-  replicas: 6
+  # Keep tiny for experiments; former “min 6 for 1M” guidance is retired
+  replicas: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: turbolog
@@ -42,11 +41,8 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: turbolog
-        app.kubernetes.io/version: "0.1.0"
-      annotations:
-        prometheus.io/scrape: "true"
-        prometheus.io/port: "8087"
-        prometheus.io/path: "/metrics"
+        app.kubernetes.io/version: "0.3.0-experimental"
+      annotations: {}
     spec:
       # ────────────────────────────────────────────
       # initContainer: Download model files
@@ -121,39 +117,32 @@ spec:
               memory: "768Mi"
 
           # ─ Probes ────────────────────────────────
-          # startupProbe: Waits up to 60 seconds (6x10s) after container startup.
-          #   Set sufficiently since model loading time can be long.
-          startupProbe:
-            httpGet:
-              path: /health
-              port: http
-            failureThreshold: 6
-            periodSeconds: 10
-            timeoutSeconds: 5
+          # DISABLED: /health and /ready are not implemented in http.rs yet.
+          # Applying these probes against the current binary will kill the pod.
+          # Uncomment only after experimental server hardening lands (tasks/todo.md).
+          #
+          # startupProbe:
+          #   httpGet:
+          #     path: /health
+          #     port: http
+          #   failureThreshold: 6
+          #   periodSeconds: 10
+          #   timeoutSeconds: 5
+          # livenessProbe:
+          #   httpGet:
+          #     path: /health
+          #     port: http
+          #   periodSeconds: 15
+          #   timeoutSeconds: 5
+          #   failureThreshold: 3
+          # readinessProbe:
+          #   httpGet:
+          #     path: /ready
+          #     port: http
+          #   periodSeconds: 10
+          #   timeoutSeconds: 5
+          #   failureThreshold: 3
 
-          # livenessProbe: Restarts if no response.
-          #   /health -> Checks if the app is alive (detects deadlocks, panics)
-          livenessProbe:
-            httpGet:
-              path: /health
-              port: http
-            initialDelaySeconds: 5
-            periodSeconds: 15
-            timeoutSeconds: 5
-            failureThreshold: 3
-
-          # readinessProbe: Availability to receive traffic.
-          #   /ready -> Returns 200 when index warm-up and model load are complete.
-          #   If not ready, returns 503 -> Excluded from Service endpoints.
-          readinessProbe:
-            httpGet:
-              path: /ready
-              port: http
-            initialDelaySeconds: 10
-            periodSeconds: 10
-            timeoutSeconds: 5
-            failureThreshold: 3
-            successThreshold: 1
 
           # ─ Volume Mounts ─────────────────────────
           volumeMounts:
@@ -176,13 +165,11 @@ spec:
             capabilities:
               drop: ["ALL"]
 
-          # ─ Graceful Shutdown ────────────────────
-          # On SIGTERM -> App exits after completing the last swap_tick.
-          # Guarantees processing completion within terminationGracePeriodSeconds.
+          # Graceful SIGTERM → final swap_tick is NOT implemented yet.
+          # preStop sleep is cosmetic only.
           lifecycle:
             preStop:
               exec:
-                # Suspends accepting new connections and waits for ongoing requests to complete
                 command: ["/bin/sh", "-c", "sleep 5"]
 
       terminationGracePeriodSeconds: 30
@@ -211,25 +198,7 @@ spec:
             medium: Memory
             sizeLimit: 64Mi
 
-      # ────────────────────────────────────────────
-      # Pod spread: Prevents multiple replicas from crowding on the same node
-      # ────────────────────────────────────────────
-      affinity:
-        podAntiAffinity:
-          # preferred: Prefer different nodes, allow same node if impossible
-          preferredDuringSchedulingIgnoredDuringExecution:
-            - weight: 100
-              podAffinityTerm:
-                labelSelector:
-                  matchLabels:
-                    app.kubernetes.io/name: turbolog
-                topologyKey: kubernetes.io/hostname
-          # required: Availability Zone (AZ) spread — If less than 2 AZs, change required -> preferred
-          requiredDuringSchedulingIgnoredDuringExecution:
-            - labelSelector:
-                matchLabels:
-                  app.kubernetes.io/name: turbolog
-              topologyKey: topology.kubernetes.io/zone
+      # No multi-AZ anti-affinity: replicas default to 1 and product scope is not HA.
 
       # Service account (Least privilege)
       serviceAccountName: turbolog

@@ -1,14 +1,6 @@
 ---
-# TurboLog PodDisruptionBudget
-#
-# Ensures that at least 4 replicas are always available during
-# rolling updates, node drains, or cluster upgrades.
-#
-# Based on a minimum of 6 replicas:
-#   minAvailable: 4 -> Allows up to 2 concurrent disruptions.
-#   Matches Deployment rollingUpdate.maxUnavailable: 2.
-#
-# When operating in 3 AZs: 4 available = at least 1 per AZ + 1 spare.
+# EXPERIMENTAL stub — with Deployment replicas: 1 this PDB is largely pointless.
+# Former minAvailable: 4 assumed a 6-replica “1M” topology that is out of product scope.
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
@@ -16,9 +8,9 @@ metadata:
   namespace: turbolog
   labels:
     app.kubernetes.io/name: turbolog
-    app.kubernetes.io/component: pdb
+    app.kubernetes.io/component: pdb-experimental
 spec:
-  minAvailable: 4
+  minAvailable: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: turbolog

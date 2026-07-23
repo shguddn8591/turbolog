@@ -1,30 +1,43 @@
 ---
-name: 🐛 Bug Report
-about: Create a report to help us improve TurboLog
+name: Bug Report
+about: Report a problem with TurboLog
 title: "[BUG] "
 labels: bug
 assignees: ""
 ---
 
 **Describe the bug**
-A clear and concise description of what the bug is.
+A clear and concise description of what went wrong.
 
 **To Reproduce**
-Steps to reproduce the behavior:
-1. Initialize the engine with config...
-2. Ingest log stream...
-3. See error...
+Prefer a **CLI** reproduction:
+
+```bash
+# example
+printf 'line1\nline2\n' | turbolog scan
+# or
+tail -f /path/to.log | turbolog watch --threshold 0.5
+```
+
+Steps:
+1. …
+2. …
+3. …
+
+If this is about experimental `serve` / `ui`, say so and include the feature build (`--features server` / `tui`).
 
 **Expected behavior**
-A clear and concise description of what you expected to happen.
+What you expected instead.
 
-**Screenshots / Logs**
-If applicable, add screenshots or console log output to help explain your problem.
+**Logs / output**
+Paste stderr/stdout (redact secrets).
 
-**Environment:**
- - OS: [e.g. Ubuntu 22.04, macOS Sonoma]
- - Rust Version: [e.g. rustc 1.78.0]
- - TurboLog Version: [e.g. v0.1.0]
+**Environment**
+- OS: [e.g. Ubuntu 22.04, macOS]
+- Install method: [cargo install / release binary / from source]
+- TurboLog version: [`turbolog --help` / crates.io version]
+- Features: [default / server / tui]
+- Local LLM (if `--explain`): [none / Ollama / LM Studio / URL]
 
 **Additional context**
-Add any other context about the problem here (e.g., specific ONNX models or sentence-transformers used).
+Model dir overrides, unusual log formats, etc.
