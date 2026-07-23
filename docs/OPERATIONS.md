@@ -154,7 +154,7 @@ Before using them even locally:
 
 1. Build an image with `--features server`.
 2. Replace placeholder registry/model URLs.
-3. Remove or rewrite healthchecks/probes until `/health` exists — current compose `healthcheck` and k8s probes target missing routes.
+3. Leave healthchecks/probes commented out until `/health` / `/ready` exist in `http.rs` (see `deploy/README.md`).
 4. Prefer binding to localhost or a private network; terminate TLS at a reverse proxy if you expose beyond the host.
 
 There is no supported guide for HPA max=50, AZ anti-affinity, or “1M req/s” sizing. Those targets are out of product scope.
