@@ -20,7 +20,7 @@ struct TextReport<'a> {
     anomalies: usize,
     rate: f64,
     top: &'a [&'a ScanEntry],
-    explanations: &'a [Option<String>],
+    contexts_and_explanations: &'a [(Option<String>, Option<String>)],
     calibration_status: CalibrationStatus,
     effective_threshold: Option<f32>,
 }
@@ -63,6 +63,8 @@ struct JsonAnomaly<'a> {
     score: f32,
     line: &'a str,
     template: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    context: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     explanation: Option<String>,
 }
@@ -138,23 +140,21 @@ pub fn run_scan(
     let top: Vec<&ScanEntry> = top.into_iter().take(10).collect();
 
     // Explain top 5, save all top 10 to history.
-    let explanations: Vec<Option<String>> = top
+    let contexts_and_explanations: Vec<(Option<String>, Option<String>)> = top
         .iter()
         .enumerate()
         .map(|(i, e)| {
             let score = e.result.score.unwrap_or(0.0);
+            let context = history.and_then(|h| h.context_for(&e.result.template));
             let explanation = if i < 5 {
-                llm.and_then(|c| {
-                    let ctx = history.and_then(|h| h.context_for(&e.result.template));
-                    c.explain(&e.line, score, ctx.as_deref())
-                })
+                llm.and_then(|c| c.explain(&e.line, score, context.as_deref()))
             } else {
                 None
             };
             if let Some(h) = history {
                 let _ = h.insert(&e.result.template, &e.line, score, explanation.as_deref());
             }
-            explanation
+            (context, explanation)
         })
         .collect();
 
@@ -170,11 +170,12 @@ pub fn run_scan(
                 effective_threshold,
                 top_anomalies: top
                     .iter()
-                    .zip(explanations.iter())
-                    .map(|(e, explanation)| JsonAnomaly {
+                    .zip(contexts_and_explanations.iter())
+                    .map(|(e, (context, explanation))| JsonAnomaly {
                         score: e.result.score.unwrap_or(0.0),
                         line: &e.line,
                         template: &e.result.template,
+                        context: context.clone(),
                         explanation: explanation.clone(),
                     })
                     .collect(),
@@ -187,7 +188,7 @@ pub fn run_scan(
             anomalies: anomaly_count,
             rate,
             top: &top,
-            explanations: &explanations,
+            contexts_and_explanations: &contexts_and_explanations,
             calibration_status,
             effective_threshold,
         }),
@@ -234,7 +235,11 @@ fn print_text_report(report: TextReport<'_>) {
     } else {
         println!();
         println!("Top anomalies:");
-        for (entry, explanation) in report.top.iter().zip(report.explanations.iter()) {
+        for (entry, (context, explanation)) in report
+            .top
+            .iter()
+            .zip(report.contexts_and_explanations.iter())
+        {
             let score = entry.result.score.unwrap_or(0.0);
             let display = if entry.line.chars().count() > 120 {
                 format!("{}…", entry.line.chars().take(119).collect::<String>())
@@ -242,8 +247,15 @@ fn print_text_report(report: TextReport<'_>) {
                 entry.line.clone()
             };
             println!("  [score={score:.2}] {display}");
+            if let Some(ctx) = context {
+                println!("    └─ Context: {ctx}");
+            }
             if let Some(exp) = explanation {
-                println!("    └─ {exp}");
+                if context.is_some() {
+                    println!("       {exp}");
+                } else {
+                    println!("    └─ {exp}");
+                }
             }
         }
     }

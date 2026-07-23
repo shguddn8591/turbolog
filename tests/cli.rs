@@ -4,7 +4,9 @@
 //! They are skipped when the ONNX model is not present (same guard as other tests).
 
 use std::io::Write;
+use std::path::Path;
 use std::process::{Command, ExitStatus, Stdio};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 fn binary() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_BIN_EXE_turbolog"))
@@ -17,6 +19,69 @@ fn models_available() -> bool {
 
 fn exit_code(status: ExitStatus) -> Option<i32> {
     status.code()
+}
+
+fn unique_temp_dir(name: &str) -> std::path::PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("turbolog-{name}-{}-{nanos}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+fn seed_history_db(xdg_data_home: &Path) {
+    let db_dir = xdg_data_home.join("turbolog");
+    std::fs::create_dir_all(&db_dir).unwrap();
+    let conn = rusqlite::Connection::open(db_dir.join("history.db")).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS anomalies (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp   INTEGER NOT NULL,
+            template    TEXT    NOT NULL,
+            line        TEXT    NOT NULL,
+            score       REAL    NOT NULL,
+            explanation TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_template  ON anomalies(template);
+        CREATE INDEX IF NOT EXISTS idx_timestamp ON anomalies(timestamp);",
+    )
+    .unwrap();
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    let rows = [
+        (
+            now - 300,
+            "db connection failed",
+            "db connection failed host=primary",
+            0.72,
+        ),
+        (
+            now - 120,
+            "db connection failed",
+            "db connection failed host=replica",
+            0.91,
+        ),
+        (
+            now - 60,
+            "db connection failed",
+            "db connection failed host=primary",
+            0.81,
+        ),
+        (now - 30, "cache miss", "cache miss key=session", 0.55),
+    ];
+    for (timestamp, template, line, score) in rows {
+        conn.execute(
+            "INSERT INTO anomalies (timestamp, template, line, score, explanation)
+             VALUES (?1, ?2, ?3, ?4, NULL)",
+            rusqlite::params![timestamp, template, line, score],
+        )
+        .unwrap();
+    }
 }
 
 /// Feed lines to turbolog watch and return (exit_code, stdout, stderr).
@@ -366,6 +431,56 @@ fn subcommand_help_works() {
             "turbolog {sub} --help should exit 0"
         );
     }
+}
+
+#[test]
+fn history_recurring_outputs_text_and_json() {
+    let xdg = unique_temp_dir("history-recurring");
+    seed_history_db(&xdg);
+
+    let text = Command::new(binary())
+        .args(["history", "--recurring", "--since", "7d"])
+        .env("XDG_DATA_HOME", &xdg)
+        .output()
+        .expect("failed to run recurring history text");
+    assert!(text.status.success(), "history --recurring failed");
+    let stdout = String::from_utf8_lossy(&text.stdout);
+    assert!(stdout.contains("TurboLog Recurring History"), "{stdout}");
+    assert!(stdout.contains("db connection failed"), "{stdout}");
+    assert!(stdout.contains("sample: db connection failed"), "{stdout}");
+
+    let json = Command::new(binary())
+        .args([
+            "history",
+            "--recurring",
+            "--since",
+            "7d",
+            "--format",
+            "json",
+        ])
+        .env("XDG_DATA_HOME", &xdg)
+        .output()
+        .expect("failed to run recurring history json");
+    assert!(
+        json.status.success(),
+        "history --recurring --format json failed"
+    );
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&json.stdout).expect("recurring history JSON must parse");
+    let entries = parsed
+        .as_array()
+        .expect("recurring history JSON is an array");
+    let db = entries
+        .iter()
+        .find(|entry| entry["template"] == "db connection failed")
+        .expect("db template should be grouped");
+    assert_eq!(db["count"], serde_json::json!(3));
+    let max_score = db["max_score"]
+        .as_f64()
+        .expect("max_score should be numeric");
+    assert!((max_score - 0.91).abs() < 0.000_001, "{max_score}");
+
+    let _ = std::fs::remove_dir_all(xdg);
 }
 
 #[test]

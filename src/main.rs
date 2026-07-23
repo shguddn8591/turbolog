@@ -75,8 +75,9 @@ fn run() -> anyhow::Result<i32> {
             template,
             format,
             limit,
+            recurring,
         } => {
-            run_history_cmd(&since, template.as_deref(), &format, limit)?;
+            run_history_cmd(&since, template.as_deref(), &format, limit, recurring)?;
             Ok(EXIT_OK)
         }
         Command::Ui { server, standalone } => {
@@ -243,6 +244,7 @@ fn run_history_cmd(
     template: Option<&str>,
     format: &str,
     limit: usize,
+    recurring: bool,
 ) -> anyhow::Result<()> {
     use turbolog::history::{HistoryQuery, HistoryStore};
 
@@ -250,11 +252,65 @@ fn run_history_cmd(
         .ok_or_else(|| anyhow::anyhow!("Invalid --since value '{since}'. Use: 7d, 24h, 30m"))?;
 
     let store = HistoryStore::open()?;
-    let entries = store.query(&HistoryQuery {
+    let query = HistoryQuery {
         since_secs: Some(since_secs),
         template: template.map(|s| s.to_string()),
         limit,
-    })?;
+    };
+
+    if recurring {
+        let entries = store.query_recurring(&query)?;
+        match format {
+            "json" => {
+                let json: Vec<serde_json::Value> = entries
+                    .iter()
+                    .map(|e| {
+                        serde_json::json!({
+                            "template": e.template,
+                            "count": e.count,
+                            "last_seen": e.last_seen,
+                            "max_score": e.max_score,
+                            "sample_line": e.sample_line,
+                        })
+                    })
+                    .collect();
+                println!("{}", serde_json::to_string_pretty(&json)?);
+            }
+            _ => {
+                if entries.is_empty() {
+                    println!("No recurring anomalies found in the last {since}.");
+                } else {
+                    println!();
+                    println!("--- TurboLog Recurring History (last {since}) ---");
+                    println!(
+                        "  {:<6}  {:<20}  {:<9}  template",
+                        "count", "last seen", "max score"
+                    );
+                    println!("  {}", "-".repeat(80));
+                    for e in &entries {
+                        let dt = format_timestamp(e.last_seen);
+                        let template = truncate_display(&e.template, 45);
+                        let sample = truncate_display(&e.sample_line, 68);
+                        println!(
+                            "  {:<6}  {:<20}  {:<9.2}  {}",
+                            e.count, dt, e.max_score, template
+                        );
+                        println!("    └─ sample: {sample}");
+                    }
+                    println!();
+                    println!(
+                        "Total: {} recurring template{}",
+                        entries.len(),
+                        if entries.len() == 1 { "" } else { "s" }
+                    );
+                    println!();
+                }
+            }
+        }
+        return Ok(());
+    }
+
+    let entries = store.query(&query)?;
 
     match format {
         "json" => {
