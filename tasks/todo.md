@@ -23,25 +23,25 @@
 ## Now — Ship a trustworthy CLI (P0)
 
 ### First-run & install UX
-- [ ] Document that default `cargo install turbolog` is CLI-only (`embedded-model`);
+- [x] Document that default `cargo install turbolog` is CLI-only (`embedded-model`);
       `server` and `tui` need `--features`
 - [ ] Improve first-run model story (binary size / download progress / offline flag) so
       “just pipe” is actually true on a clean machine
-- [ ] Keep release binaries in GitHub Releases as the no-Rust path; verify README links
+- [x] Keep release binaries in GitHub Releases as the no-Rust path; verify README links
 
 ### Detection quality for triage (not “AI ops”)
 - [ ] Surface calibration state clearly (`watch`: calibrating → ready; `scan`: small-input rules)
 - [ ] Make `--threshold` and auto threshold understandable in help text / docs
       (score = novelty distance, not probability)
-- [ ] Reduce false novelty on known-benign bursts where cheap heuristics help
+- [x] Reduce false novelty on known-benign bursts where cheap heuristics help
       (e.g. repeated identical templates after calibration)
 - [ ] Persist / show recurring patterns via `history` so repeat anomalies are actionable
 
 ### Explain as optional garnish
-- [ ] Keep `--explain` a no-op when no LLM is found (already true) — never imply it is required
+- [x] Keep `--explain` a no-op when no LLM is found (already true) — never imply it is required
 - [ ] Improve history context line for recurring templates (roadmap item below)
-- [ ] Do not block the pipe path on slow LLM calls without a clear timeout story
-      (document 30s timeout; consider async/non-blocking explain later)
+- [x] Document the 30s timeout story for slow LLM calls
+- [ ] Consider async/non-blocking explain later
 
 ### Docs hygiene (this pass)
 - [x] Rewrite `tasks/todo.md` around CLI-first direction
