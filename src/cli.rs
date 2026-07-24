@@ -79,6 +79,9 @@ pub enum Command {
         /// Maximum number of rows to show (default: 50)
         #[arg(long, default_value = "50")]
         limit: usize,
+        /// Group entries by recurring template
+        #[arg(long)]
+        recurring: bool,
     },
     /// Experimental TUI dashboard (requires `--features tui`)
     Ui {

@@ -29,6 +29,14 @@ pub struct HistoryEntry {
     pub explanation: Option<String>,
 }
 
+pub struct RecurringHistoryEntry {
+    pub template: String,
+    pub count: i64,
+    pub last_seen: i64,
+    pub max_score: f32,
+    pub sample_line: String,
+}
+
 pub struct HistoryStore {
     conn: Connection,
 }
@@ -40,18 +48,7 @@ impl HistoryStore {
             std::fs::create_dir_all(parent)?;
         }
         let conn = Connection::open(&path)?;
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS anomalies (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp   INTEGER NOT NULL,
-                template    TEXT    NOT NULL,
-                line        TEXT    NOT NULL,
-                score       REAL    NOT NULL,
-                explanation TEXT
-            );
-            CREATE INDEX IF NOT EXISTS idx_template  ON anomalies(template);
-            CREATE INDEX IF NOT EXISTS idx_timestamp ON anomalies(timestamp);",
-        )?;
+        init_schema(&conn)?;
         Ok(Self { conn })
     }
 
@@ -105,8 +102,69 @@ impl HistoryStore {
         Ok(entries)
     }
 
+    /// Query recurring anomaly templates with optional filters.
+    pub fn query_recurring(&self, q: &HistoryQuery) -> Result<Vec<RecurringHistoryEntry>> {
+        let cutoff = q.since_secs.map(|s| now_secs() - s).unwrap_or(0);
+        let limit = q.limit as i64;
+
+        let mut entries: Vec<RecurringHistoryEntry> = Vec::new();
+
+        if let Some(ref tmpl) = q.template {
+            let pattern = format!("%{tmpl}%");
+            let mut stmt = self.conn.prepare(
+                "SELECT
+                    a.template,
+                    COUNT(*) AS count,
+                    MAX(a.timestamp) AS last_seen,
+                    MAX(a.score) AS max_score,
+                    (
+                        SELECT b.line
+                        FROM anomalies b
+                        WHERE b.template = a.template AND b.timestamp >= ?1
+                        ORDER BY b.timestamp DESC, b.id DESC
+                        LIMIT 1
+                    ) AS sample_line
+                 FROM anomalies a
+                 WHERE a.timestamp >= ?1 AND a.template LIKE ?2
+                 GROUP BY a.template
+                 ORDER BY count DESC, last_seen DESC
+                 LIMIT ?3",
+            )?;
+            let mut rows = stmt.query(params![cutoff, pattern, limit])?;
+            while let Some(row) = rows.next()? {
+                entries.push(map_recurring_row(row)?);
+            }
+        } else {
+            let mut stmt = self.conn.prepare(
+                "SELECT
+                    a.template,
+                    COUNT(*) AS count,
+                    MAX(a.timestamp) AS last_seen,
+                    MAX(a.score) AS max_score,
+                    (
+                        SELECT b.line
+                        FROM anomalies b
+                        WHERE b.template = a.template AND b.timestamp >= ?1
+                        ORDER BY b.timestamp DESC, b.id DESC
+                        LIMIT 1
+                    ) AS sample_line
+                 FROM anomalies a
+                 WHERE a.timestamp >= ?1
+                 GROUP BY a.template
+                 ORDER BY count DESC, last_seen DESC
+                 LIMIT ?2",
+            )?;
+            let mut rows = stmt.query(params![cutoff, limit])?;
+            while let Some(row) = rows.next()? {
+                entries.push(map_recurring_row(row)?);
+            }
+        }
+
+        Ok(entries)
+    }
+
     /// Returns a one-line context string for the given template, e.g.
-    /// "seen 3× in the last 7 days (last: 2h ago)" — or None if no prior history.
+    /// "seen 3× in the last 7 days (last seen: 2h ago)" — or None if no prior history.
     pub fn context_for(&self, template: &str) -> Option<String> {
         let cutoff = now_secs() - 7 * 86_400;
         let count: i64 = self
@@ -125,17 +183,33 @@ impl HistoryStore {
         let last_ts: i64 = self
             .conn
             .query_row(
-                "SELECT MAX(timestamp) FROM anomalies WHERE template = ?1",
-                params![template],
+                "SELECT MAX(timestamp) FROM anomalies WHERE template = ?1 AND timestamp >= ?2",
+                params![template, cutoff],
                 |row| row.get(0),
             )
             .unwrap_or(0);
 
         let age = format_age(now_secs() - last_ts);
         Some(format!(
-            "This log pattern has occurred {count}× in the last 7 days (last seen: {age})"
+            "seen {count}× in the last 7 days (last seen: {age})"
         ))
     }
+}
+
+fn init_schema(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS anomalies (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp   INTEGER NOT NULL,
+            template    TEXT    NOT NULL,
+            line        TEXT    NOT NULL,
+            score       REAL    NOT NULL,
+            explanation TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_template  ON anomalies(template);
+        CREATE INDEX IF NOT EXISTS idx_timestamp ON anomalies(timestamp);",
+    )?;
+    Ok(())
 }
 
 fn map_history_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<HistoryEntry> {
@@ -145,6 +219,16 @@ fn map_history_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<HistoryEntry> {
         line: row.get(2)?,
         score: row.get::<_, f64>(3)? as f32,
         explanation: row.get(4)?,
+    })
+}
+
+fn map_recurring_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RecurringHistoryEntry> {
+    Ok(RecurringHistoryEntry {
+        template: row.get(0)?,
+        count: row.get(1)?,
+        last_seen: row.get(2)?,
+        max_score: row.get::<_, f64>(3)? as f32,
+        sample_line: row.get(4)?,
     })
 }
 
@@ -176,4 +260,126 @@ fn db_path() -> PathBuf {
                 .join(".local/share")
         });
     base.join("turbolog/history.db")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn memory_store() -> HistoryStore {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn).unwrap();
+        HistoryStore { conn }
+    }
+
+    fn insert_at(store: &HistoryStore, timestamp: i64, template: &str, line: &str, score: f32) {
+        store
+            .conn
+            .execute(
+                "INSERT INTO anomalies (timestamp, template, line, score, explanation)
+                 VALUES (?1, ?2, ?3, ?4, NULL)",
+                params![timestamp, template, line, score as f64],
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn recurring_history_aggregates_by_template() {
+        let store = memory_store();
+        let now = now_secs();
+        insert_at(
+            &store,
+            now - 3_600,
+            "db connection failed",
+            "db connection failed",
+            0.72,
+        );
+        insert_at(
+            &store,
+            now - 120,
+            "db connection failed",
+            "db connection failed retry",
+            0.91,
+        );
+        insert_at(
+            &store,
+            now - 60,
+            "db connection failed",
+            "db connection failed final",
+            0.81,
+        );
+        insert_at(&store, now - 30, "cache miss", "cache miss key=abc", 0.55);
+        insert_at(
+            &store,
+            now - 8 * 86_400,
+            "db connection failed",
+            "old db connection failed",
+            0.99,
+        );
+
+        let entries = store
+            .query_recurring(&HistoryQuery {
+                since_secs: Some(7 * 86_400),
+                template: None,
+                limit: 10,
+            })
+            .unwrap();
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].template, "db connection failed");
+        assert_eq!(entries[0].count, 3);
+        assert_eq!(entries[0].last_seen, now - 60);
+        assert!((entries[0].max_score - 0.91).abs() < f32::EPSILON);
+        assert_eq!(entries[0].sample_line, "db connection failed final");
+    }
+
+    #[test]
+    fn recurring_history_filters_by_template_substring() {
+        let store = memory_store();
+        let now = now_secs();
+        insert_at(
+            &store,
+            now - 60,
+            "db connection failed",
+            "db connection failed",
+            0.72,
+        );
+        insert_at(&store, now - 30, "cache miss", "cache miss key=abc", 0.55);
+
+        let entries = store
+            .query_recurring(&HistoryQuery {
+                since_secs: Some(7 * 86_400),
+                template: Some("connection".to_string()),
+                limit: 10,
+            })
+            .unwrap();
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].template, "db connection failed");
+    }
+
+    #[test]
+    fn context_for_matches_user_visible_copy() {
+        let store = memory_store();
+        let now = now_secs();
+        insert_at(
+            &store,
+            now - 3_600,
+            "db connection failed",
+            "db connection failed",
+            0.72,
+        );
+        insert_at(
+            &store,
+            now - 60,
+            "db connection failed",
+            "db connection failed retry",
+            0.91,
+        );
+
+        let context = store.context_for("db connection failed").unwrap();
+
+        assert!(context.starts_with("seen 2× in the last 7 days (last seen: "));
+        assert!(context.ends_with(" ago)"));
+    }
 }
