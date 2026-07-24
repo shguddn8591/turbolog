@@ -66,17 +66,19 @@ Path (Linux XDG-style): `~/.local/share/turbolog/history.db` (SQLite).
 
 ### Model files
 
-Detection needs `model.onnx` + `tokenizer.json` (all-MiniLM-L6-v2).
+Detection needs `model.onnx` + `tokenizer.json` (all-MiniLM-L6-v2, ~86–90 MB).
 
-- Default `cargo install` / embedded-model builds bake or fetch these.
-- Override with `TURBOLOG_MODEL_DIR`.
-- Offline builds: set `TURBOLOG_SKIP_MODEL_DOWNLOAD=1` at compile time and supply models yourself (`./scripts/download_model.sh` when online).
+- Default `cargo install` / embedded-model builds download once at build time and bake these into the binary.
+- Non-embedded builds download on first run, then reuse the local files.
+- Override with `TURBOLOG_MODEL_DIR`, or place files in `./models`.
+- Offline embedded builds: pre-populate `./models`, then set `TURBOLOG_SKIP_MODEL_DOWNLOAD=1` at compile time.
+- Offline non-embedded runs: set `TURBOLOG_OFFLINE=1` to fail fast if files are missing instead of attempting a download.
 
 ### Local LLM (`--explain`)
 
 - Optional. Detection never depends on it.
 - Auto-detect order: `TURBOLOG_LLM_URL` → Ollama `:11434` → LM Studio `:1234`.
-- Explain requests time out (tens of seconds); on failure the anomaly line still prints without a footer.
+- Explain requests time out after 30 seconds; on failure the anomaly line still prints without a footer.
 - Treat explanations as **unverified hints**, not root-cause truth.
 
 ---
@@ -120,6 +122,8 @@ Single-node / trusted-network daemonization of **one** log stream or host — e.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `TURBOLOG_MODEL_DIR` | `./models` | ONNX + tokenizer directory |
+| `TURBOLOG_OFFLINE` | unset | Set to `1` to prevent first-run model downloads in non-embedded builds |
+| `TURBOLOG_SKIP_MODEL_DOWNLOAD` | unset | Compile-time only; skip embedded-model download after pre-populating `./models` |
 | `TURBOLOG_LLM_URL` | _(auto)_ | OpenAI-compatible base URL |
 | `TURBOLOG_LLM_MODEL` | _(auto)_ | Model name for `/v1/chat/completions` |
 | `NO_COLOR` | unset | Disable ANSI colors when set |
@@ -140,7 +144,7 @@ Single-node / trusted-network daemonization of **one** log stream or host — e.
 ## 4. Data & privacy
 
 - **Local-first:** anomaly detection does not call a cloud API.
-- **Model download** may hit the network at build or first run (Hugging Face / configured URL) unless you pre-provision models and skip download.
+- **Model download** may hit the network once at build time (default embedded builds) or first run (non-embedded builds) unless you pre-provision models and skip/disable download.
 - **`--explain`** sends anomalous lines to whatever LLM URL you configured (often localhost).
 - **History DB** retains anomaly text/templates on disk — treat like any other local log derivative (permissions, disk encryption, secrets in logs).
 

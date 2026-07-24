@@ -29,8 +29,8 @@ Novelty (distance from calibrated “normal” templates) is highlighted; that i
 ```
 
 **Two layers — only one is required:**
-- **MiniLM** (built-in, always on): an ~86 MB ONNX model. Powers novelty / anomaly scoring. No API key; no network needed at runtime after the model is present.
-- **LLM** (optional, `--explain` only): calls a locally running [Ollama](https://ollama.ai) or [LM Studio](https://lmstudio.ai) to narrate *why* a line looks unusual. Auto-detected. Never required for detection.
+- **MiniLM** (built-in, always on): an ~86–90 MB ONNX model; release binaries are typically ~90 MB because they include it. Powers novelty / anomaly scoring. No API key; default builds download it once at build time and embed it, while non-embedded builds fetch it on first run. No network is needed at runtime after the model is present.
+- **LLM** (optional, `--explain` only): calls a locally running [Ollama](https://ollama.ai) or [LM Studio](https://lmstudio.ai) to narrate *why* a line looks unusual. Auto-detected. Never required for detection; if unavailable, `--explain` is ignored.
 
 **Product focus:** `watch` · `scan` · `history`.  
 `serve` and `ui` exist behind Cargo features and are **experimental** — see [Experimental: serve / ui](#experimental-serve--ui).
@@ -51,11 +51,20 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 cargo install turbolog
 ```
 
-> The first build downloads the embedded MiniLM model (~86 MB) and bakes it into the binary
-> (or fetches it on first run if needed). After that, detection runs offline.
+> The first build downloads the embedded MiniLM model (~86–90 MB) and bakes it into the binary.
+> Non-embedded builds fetch it on first run instead. After the model is present, detection runs offline.
 > Default install includes `embedded-model` only — not the HTTP server or TUI.
 
-Alternatively, grab a prebuilt binary from [Releases](https://github.com/shguddn8591/turbolog/releases).
+No Rust toolchain? Use a prebuilt CLI binary instead:
+
+- Grab the matching archive from [Releases](https://github.com/shguddn8591/turbolog/releases).
+- Or run the installer script, which downloads the latest release asset:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/shguddn8591/turbolog/main/scripts/install.sh | bash
+```
+
+Release binaries are typically ~90 MB because they include MiniLM. Current release assets cover Linux x86_64/aarch64 and macOS Apple Silicon (`aarch64-macos`); macOS Intel (`x86_64-macos`) users should install from source with `cargo install turbolog`.
 
 Optional feature builds:
 
@@ -103,8 +112,8 @@ turbolog history --since 24h
 turbolog history --since 7d --template "connection" --format json
 ```
 
-**What the score means:** higher ≈ farther from calibrated normal templates (novelty).
-It is **not** a calibrated probability of “something is broken.” Tune with `--threshold` when needed.
+**What the score means:** higher ≈ farther from calibrated normal templates (Euclidean novelty distance).
+It is **not** a calibrated probability of “something is broken.” Auto threshold is median + 3·MAD with a 0.10 floor; tune with `--threshold` when needed.
 
 ---
 
@@ -123,8 +132,8 @@ tail -f /var/log/app.log | turbolog watch --only-anomalies
 
 | Flag | Description |
 |---|---|
-| `--explain` | Call local LLM to explain each anomaly |
-| `--threshold <f32>` | Override auto-calibrated anomaly score floor |
+| `--explain` | Call local LLM to explain each anomaly; no-op when none is reachable |
+| `--threshold <f32>` | Override auto novelty distance threshold |
 | `--only-anomalies` | Print anomaly lines only |
 | `--quiet` | Suppress calibrating / status noise |
 | `--llm-url <url>` | LLM base URL (default: auto-detect). Also: `TURBOLOG_LLM_URL` |
@@ -155,8 +164,8 @@ turbolog scan --format json --explain < app.log
 | Flag | Description |
 |---|---|
 | <code>--format text&#124;json</code> | Output format (default: `text`) |
-| `--explain` | Explain top 5 anomalies with local LLM |
-| `--threshold <f32>` | Override auto threshold |
+| `--explain` | Explain top 5 anomalies with local LLM; no-op when none is reachable |
+| `--threshold <f32>` | Override auto novelty distance threshold |
 | `--llm-url`, `--llm-model` | Same as `watch` |
 
 Text report:
@@ -264,6 +273,7 @@ TURBOLOG_LLM_URL=http://localhost:11434 TURBOLOG_LLM_MODEL=llama3.2 \
 ```
 
 If no LLM is found, `watch` and `scan` work normally — `--explain` is a no-op.
+If an LLM is reachable but slow, each explanation request times out after 30 seconds; detection still prints the anomaly, and the explanation footer is omitted.
 
 ---
 
@@ -274,6 +284,8 @@ If no LLM is found, `watch` and `scan` work normally — `--explain` is a no-op.
 | Variable | Description |
 |---|---|
 | `TURBOLOG_MODEL_DIR` | Directory containing `model.onnx` and `tokenizer.json` (default: `./models`) |
+| `TURBOLOG_OFFLINE` | For non-embedded builds, set to `1` to fail fast instead of downloading missing runtime models |
+| `TURBOLOG_SKIP_MODEL_DOWNLOAD` | Compile-time only: skip the embedded-model download when you have already supplied `models/model.onnx` and `models/tokenizer.json` |
 | `TURBOLOG_LLM_URL` | LLM base URL override |
 | `TURBOLOG_LLM_MODEL` | LLM model name override |
 | `NO_COLOR` | Disable ANSI colors when set |
@@ -345,11 +357,18 @@ Centroids are **frozen after calibration** (no online re-training). That keeps t
 git clone https://github.com/shguddn8591/turbolog.git
 cd turbolog
 
-# Download the ONNX model (~86 MB, required for embedding)
+# Download the ONNX model (~86–90 MB, required for embedding)
 ./scripts/download_model.sh
 
 # CLI (default)
 cargo build --release
+
+# Offline build after pre-populating ./models
+TURBOLOG_SKIP_MODEL_DOWNLOAD=1 cargo build --release
+
+# Non-embedded build: downloads on first run unless TURBOLOG_MODEL_DIR points
+# at existing files or TURBOLOG_OFFLINE=1 is set
+cargo build --release --no-default-features
 
 # Optional features
 cargo build --release --features tui
