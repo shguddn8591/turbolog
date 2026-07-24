@@ -114,6 +114,55 @@ fn watch_outputs_lines_for_input() {
 }
 
 #[test]
+fn watch_shows_calibration_progress_and_threshold() {
+    if !models_available() {
+        eprintln!(
+            "skipping cli::watch_shows_calibration_progress_and_threshold — models not present"
+        );
+        return;
+    }
+    let seeds = [
+        "user login OK",
+        "request processed in 12ms",
+        "cache hit while fetching key",
+    ];
+    let mut input = String::new();
+    for i in 0..503 {
+        input.push_str(seeds[i % seeds.len()]);
+        input.push('\n');
+    }
+    let (code, stdout, stderr) = pipe_to_watch(&input, &["--threshold", "10"]);
+    assert_eq!(code, Some(0));
+    assert!(
+        stdout.contains("[calibrating ") && stdout.contains("/64]"),
+        "watch should show calibration progress in line prefixes: {stdout}"
+    );
+    assert!(
+        stderr.contains("calibration complete") && stderr.contains("threshold=10.000"),
+        "watch should report effective threshold on calibration completion: {stderr}"
+    );
+}
+
+#[test]
+fn watch_quiet_suppresses_calibration_prefix() {
+    if !models_available() {
+        eprintln!("skipping cli::watch_quiet_suppresses_calibration_prefix — models not present");
+        return;
+    }
+    let input = "user login OK\nrequest processed in 12ms\n";
+    let (code, stdout, stderr) = pipe_to_watch(input, &["--quiet"]);
+    assert_eq!(code, Some(0));
+    assert!(
+        !stdout.contains("[calibrating"),
+        "quiet should suppress calibration prefixes: {stdout}"
+    );
+    assert!(
+        !stderr.contains("calibration"),
+        "quiet should suppress calibration status: {stderr}"
+    );
+}
+
+#[test]
 fn watch_only_anomalies_suppresses_normal_lines() {
     if !models_available() {
         eprintln!(
@@ -182,6 +231,10 @@ fn scan_text_report_contains_summary() {
         stdout.contains("Templates found"),
         "text report should contain 'Templates found': {stdout}"
     );
+    assert!(
+        stdout.contains("Calibration     : incomplete"),
+        "small uniform input should explain that calibration is incomplete: {stdout}"
+    );
 }
 
 #[test]
@@ -198,6 +251,36 @@ fn scan_json_report_is_valid() {
     assert!(parsed["lines_processed"].is_number());
     assert!(parsed["templates_found"].is_number());
     assert!(parsed["anomalies_total"].is_number());
+}
+
+#[test]
+fn scan_text_report_explains_eof_finalize_threshold() {
+    if !models_available() {
+        eprintln!(
+            "skipping cli::scan_text_report_explains_eof_finalize_threshold — models not present"
+        );
+        return;
+    }
+    let lines = [
+        "user authentication succeeded for account",
+        "disk space running low on primary partition",
+        "cache miss while fetching session key",
+        "outbound email delivered to recipient",
+        "database migration completed without errors",
+        "scheduled backup job finished cleanly",
+        "payment authorized through external gateway",
+        "configuration reloaded from environment",
+        "websocket client subscribed to channel",
+        "image thumbnail generated and stored",
+        "search index rebuilt from latest snapshot",
+    ];
+    let input = lines.join("\n");
+    let (code, stdout, _stderr) = pipe_to_scan_args(&input, "text", &["--threshold", "10"]);
+    assert_eq!(code, Some(0));
+    assert!(
+        stdout.contains("Calibration     : complete (EOF finalize, threshold=10.000)"),
+        "scan text should explain EOF calibration and threshold: {stdout}"
+    );
 }
 
 #[test]
@@ -229,6 +312,8 @@ fn scan_calibrates_below_64_templates() {
     let parsed: serde_json::Value =
         serde_json::from_str(&stdout).expect("scan --format json must emit valid JSON");
     assert_eq!(parsed["calibrated"], serde_json::Value::Bool(true));
+    assert_eq!(parsed["calibration_status"], "eof_finalized");
+    assert!(parsed["effective_threshold"].is_number());
     assert!(parsed["anomalies_total"].as_u64().unwrap_or(0) > 0);
 }
 

@@ -181,8 +181,19 @@ impl LocalPipeline {
         self.detector.is_some()
     }
 
+    pub fn effective_threshold(&self) -> Option<f32> {
+        self.detector.as_ref().map(|detector| {
+            self.threshold_override
+                .unwrap_or_else(|| detector.threshold())
+        })
+    }
+
     pub fn calibration_progress(&self) -> usize {
         self.calibration_count
+    }
+
+    pub fn calibration_target(&self) -> usize {
+        CALIBRATION_TEMPLATES
     }
 }
 

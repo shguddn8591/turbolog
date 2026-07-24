@@ -144,7 +144,7 @@ Exit codes: `0` = no anomalies, `1` = anomalies seen, `2` = error.
 Output format:
 
 ```
-[calibrating]        app started on port 8080          ← first unique templates
+[calibrating 1/64]   app started on port 8080          ← calibration progress
 INFO                 request processed in 12ms          ← normal line (no prefix)
 [ANOMALY 0.91]       OOM killer activated for pid 4821  ← anomaly (red)
   └─ Memory exhausted; check process RSS and limits.    ← LLM explanation (cyan)
