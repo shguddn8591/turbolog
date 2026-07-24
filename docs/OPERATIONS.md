@@ -76,7 +76,7 @@ Detection needs `model.onnx` + `tokenizer.json` (all-MiniLM-L6-v2).
 
 - Optional. Detection never depends on it.
 - Auto-detect order: `TURBOLOG_LLM_URL` → Ollama `:11434` → LM Studio `:1234`.
-- Explain requests time out (tens of seconds); on failure the anomaly line still prints without a footer.
+- Explain requests time out after 30 seconds; on failure the anomaly line still prints without a footer.
 - Treat explanations as **unverified hints**, not root-cause truth.
 
 ---
