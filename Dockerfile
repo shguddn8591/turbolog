@@ -1,8 +1,12 @@
 # =============================================================================
-# TurboLog — Multi-stage Dockerfile
+# TurboLog — Multi-stage Dockerfile (EXPERIMENTAL `serve` image)
 # =============================================================================
+# Product north star is the local CLI (cargo install / release binaries), not
+# this image. Build only when experimenting with `--features server`.
+# See tasks/todo.md and docs/OPERATIONS.md.
+#
 # Structure:
-#   Stage 1 (builder) : cargo build --release from rust:1-bookworm
+#   Stage 1 (builder) : cargo build --release --features server
 #   Stage 2 (runtime) : debian:bookworm-slim, non-root user uid=10001
 #
 # ONNX Runtime notes:
@@ -15,16 +19,14 @@
 # Model file injection:
 #   model.onnx / tokenizer.json (~90 MB) are not baked into the image.
 #   Specify the volume path via the TURBOLOG_MODEL_DIR environment variable at runtime.
-#   In Kubernetes, inject via initContainer or a pre-baked model-init image.
-#   (See deploy/k8s/deployment.yaml)
 #
-# Environment variables:
+# Environment variables (serve):
 #   TURBOLOG_PORT         HTTP listen port              (Default: 8087)
 #   TURBOLOG_DATA_DIR     WAL/Index storage path        (Default: /data)
 #   TURBOLOG_MODEL_DIR    Model file path               (Default: /models)
 #   TURBOLOG_EMBEDDERS    Number of embedder threads    (Default: 2)
 #   TURBOLOG_AUTH_TOKEN   Bearer token (No auth if empty)
-#   TURBOLOG_MAX_INFLIGHT Max concurrent processing     (Backpressure)
+#   TURBOLOG_MAX_INFLIGHT Documented historically; not enforced by current http.rs
 # =============================================================================
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -40,7 +42,7 @@ COPY Cargo.toml Cargo.lock ./
 
 # Pre-compile only dependencies using a dummy main.rs.
 RUN mkdir -p src && echo 'fn main(){}' > src/main.rs && \
-    cargo build --release 2>&1 | tail -5 || true && \
+    cargo build --release --features server 2>&1 | tail -5 || true && \
     # Remove dummy artifacts (inducing a rebuild with the actual source)
     rm -rf src target/release/turbolog target/release/deps/turbolog*
 
@@ -53,7 +55,7 @@ COPY src ./src
 #   After COPY, copy to /usr/local/lib/ in the runtime stage + run ldconfig
 ENV ORT_STRATEGY=download
 
-RUN cargo build --release && \
+RUN cargo build --release --features server && \
     strip target/release/turbolog
 
 # ──────────────────────────────────────────────────────────────────────────────

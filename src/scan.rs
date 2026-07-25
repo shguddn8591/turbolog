@@ -14,6 +14,34 @@ struct ScanEntry {
     result: LineResult,
 }
 
+struct TextReport<'a> {
+    total: usize,
+    templates: usize,
+    anomalies: usize,
+    rate: f64,
+    top: &'a [&'a ScanEntry],
+    contexts_and_explanations: &'a [(Option<String>, Option<String>)],
+    calibration_status: CalibrationStatus,
+    effective_threshold: Option<f32>,
+}
+
+#[derive(Clone, Copy)]
+enum CalibrationStatus {
+    StreamingTrigger,
+    EofFinalized,
+    NotEnoughData,
+}
+
+impl CalibrationStatus {
+    fn as_json(self) -> &'static str {
+        match self {
+            Self::StreamingTrigger => "streaming_trigger",
+            Self::EofFinalized => "eof_finalized",
+            Self::NotEnoughData => "not_enough_data",
+        }
+    }
+}
+
 pub struct ScanStats {
     pub anomaly_count: usize,
 }
@@ -25,6 +53,8 @@ struct JsonReport<'a> {
     anomalies_total: usize,
     anomaly_rate_pct: f64,
     calibrated: bool,
+    calibration_status: &'static str,
+    effective_threshold: Option<f32>,
     top_anomalies: Vec<JsonAnomaly<'a>>,
 }
 
@@ -33,6 +63,8 @@ struct JsonAnomaly<'a> {
     score: f32,
     line: &'a str,
     template: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    context: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     explanation: Option<String>,
 }
@@ -62,7 +94,9 @@ pub fn run_scan(
     // on the collected templates, then re-score the lines seen before the detector existed.
     // Uses `rescore` (template -> cached vector) instead of `process` so this doesn't
     // re-feed every line into Drain's stateful tree a second time.
-    if pipeline.finalize() {
+    let was_calibrated = pipeline.calibrated();
+    let calibrated = pipeline.finalize();
+    if calibrated {
         for entry in &mut entries {
             if entry.result.score.is_none() {
                 match pipeline.rescore(&entry.result.template) {
@@ -73,6 +107,14 @@ pub fn run_scan(
             }
         }
     }
+    let calibration_status = if was_calibrated {
+        CalibrationStatus::StreamingTrigger
+    } else if calibrated {
+        CalibrationStatus::EofFinalized
+    } else {
+        CalibrationStatus::NotEnoughData
+    };
+    let effective_threshold = pipeline.effective_threshold();
 
     let total = entries.len();
     let anomalies: Vec<&ScanEntry> = entries.iter().filter(|e| e.result.is_anomaly).collect();
@@ -98,23 +140,21 @@ pub fn run_scan(
     let top: Vec<&ScanEntry> = top.into_iter().take(10).collect();
 
     // Explain top 5, save all top 10 to history.
-    let explanations: Vec<Option<String>> = top
+    let contexts_and_explanations: Vec<(Option<String>, Option<String>)> = top
         .iter()
         .enumerate()
         .map(|(i, e)| {
             let score = e.result.score.unwrap_or(0.0);
+            let context = history.and_then(|h| h.context_for(&e.result.template));
             let explanation = if i < 5 {
-                llm.and_then(|c| {
-                    let ctx = history.and_then(|h| h.context_for(&e.result.template));
-                    c.explain(&e.line, score, ctx.as_deref())
-                })
+                llm.and_then(|c| c.explain(&e.line, score, context.as_deref()))
             } else {
                 None
             };
             if let Some(h) = history {
                 let _ = h.insert(&e.result.template, &e.line, score, explanation.as_deref());
             }
-            explanation
+            (context, explanation)
         })
         .collect();
 
@@ -125,60 +165,81 @@ pub fn run_scan(
                 templates_found: templates.len(),
                 anomalies_total: anomaly_count,
                 anomaly_rate_pct: rate,
-                calibrated: pipeline.calibrated(),
+                calibrated,
+                calibration_status: calibration_status.as_json(),
+                effective_threshold,
                 top_anomalies: top
                     .iter()
-                    .zip(explanations.iter())
-                    .map(|(e, explanation)| JsonAnomaly {
+                    .zip(contexts_and_explanations.iter())
+                    .map(|(e, (context, explanation))| JsonAnomaly {
                         score: e.result.score.unwrap_or(0.0),
                         line: &e.line,
                         template: &e.result.template,
+                        context: context.clone(),
                         explanation: explanation.clone(),
                     })
                     .collect(),
             };
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
-        _ => print_text_report(
+        _ => print_text_report(TextReport {
             total,
-            templates.len(),
-            anomaly_count,
+            templates: templates.len(),
+            anomalies: anomaly_count,
             rate,
-            &top,
-            &explanations,
-            pipeline.calibrated(),
-        ),
+            top: &top,
+            contexts_and_explanations: &contexts_and_explanations,
+            calibration_status,
+            effective_threshold,
+        }),
     }
 
     Ok(ScanStats { anomaly_count })
 }
 
-fn print_text_report(
-    total: usize,
-    templates: usize,
-    anomalies: usize,
-    rate: f64,
-    top: &[&ScanEntry],
-    explanations: &[Option<String>],
-    calibrated: bool,
-) {
+fn print_text_report(report: TextReport<'_>) {
     println!();
     println!("--- TurboLog Scan Report ---");
-    println!("Lines processed : {total}");
-    println!("Templates found : {templates}");
-    println!("Anomalies       : {anomalies} ({rate:.2}%)");
-    if !calibrated {
-        println!(
-            "Note            : Not enough data to calibrate (need at least 8 unique log templates) — scores unavailable"
-        );
+    println!("Lines processed : {}", report.total);
+    println!("Templates found : {}", report.templates);
+    println!(
+        "Anomalies       : {} ({:.2}%)",
+        report.anomalies, report.rate
+    );
+    match report.calibration_status {
+        CalibrationStatus::StreamingTrigger => {
+            if let Some(threshold) = report.effective_threshold {
+                println!(
+                    "Calibration     : complete (streaming trigger, threshold={threshold:.3})"
+                );
+            } else {
+                println!("Calibration     : complete (streaming trigger)");
+            }
+        }
+        CalibrationStatus::EofFinalized => {
+            if let Some(threshold) = report.effective_threshold {
+                println!("Calibration     : complete (EOF finalize, threshold={threshold:.3})");
+            } else {
+                println!("Calibration     : complete (EOF finalize)");
+            }
+        }
+        CalibrationStatus::NotEnoughData => {
+            println!(
+                "Calibration     : incomplete (need at least 8 unique log templates at EOF; scores unavailable)"
+            );
+        }
     }
-    if top.is_empty() {
+    if report.top.is_empty() {
         println!();
         println!("No anomalies detected.");
     } else {
         println!();
         println!("Top anomalies:");
-        for (entry, explanation) in top.iter().zip(explanations.iter()) {
+        for (entry, (context, explanation)) in report
+            .top
+            .iter()
+            .zip(report.contexts_and_explanations.iter())
+        {
             let score = entry.result.score.unwrap_or(0.0);
             let display = if entry.line.chars().count() > 120 {
                 format!("{}…", entry.line.chars().take(119).collect::<String>())
@@ -186,8 +247,15 @@ fn print_text_report(
                 entry.line.clone()
             };
             println!("  [score={score:.2}] {display}");
+            if let Some(ctx) = context {
+                println!("    └─ Context: {ctx}");
+            }
             if let Some(exp) = explanation {
-                println!("    └─ {exp}");
+                if context.is_some() {
+                    println!("       {exp}");
+                } else {
+                    println!("    └─ {exp}");
+                }
             }
         }
     }

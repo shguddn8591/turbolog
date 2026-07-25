@@ -1,64 +1,63 @@
 ---
-# TurboLog — Docker Compose for single-node local execution
+# EXPERIMENTAL — not a supported production topology.
 #
-# Usage:
-#   # Prepare model files in ./models/ in advance (model.onnx, tokenizer.json)
-#   docker compose up --build
+# TurboLog's product is the local CLI (watch/scan/history). These manifests exist for
+# contributors exploring `cargo build --features server`. They will NOT work as-is:
+#   - Image/registry URLs are placeholders
+#   - Probes hit /health and /ready, which http.rs does not implement yet
+#   - /metrics is not exposed over HTTP
+# See docs/OPERATIONS.md and tasks/todo.md (CLI-first roadmap).
 #
-# Model file preparation example:
-#   mkdir -p models
-#   # Internal artifact storage or direct copy
-#   # cp /path/to/model.onnx ./models/
-#   # cp /path/to/tokenizer.json ./models/
+# TurboLog — Docker Compose for single-node local experiments with `serve`
 #
-# Environment variables can be overridden with a .env file:
-#   TURBOLOG_AUTH_TOKEN=mysecret docker compose up
+# Usage (after you have a server-featured image and real models):
+#   mkdir -p models && ./scripts/download_model.sh   # or mount your models
+#   docker compose -f deploy/docker-compose.yml up --build
+#
+# Healthcheck below is DISABLED in spirit — /health does not exist yet.
+# Replace with a real probe only after WS-style HTTP hardening lands.
 
 services:
   turbolog:
     build:
       context: ..
       dockerfile: Dockerfile
-    image: turbolog:local
-    container_name: turbolog
+    image: turbolog:local-experimental
+    container_name: turbolog-experimental
     restart: unless-stopped
+    profiles:
+      - experimental-server
 
     ports:
       - "8087:8087"
 
     environment:
       TURBOLOG_PORT: "8087"
+      TURBOLOG_BIND: "0.0.0.0"
       TURBOLOG_DATA_DIR: "/data"
       TURBOLOG_MODEL_DIR: "/models"
       TURBOLOG_EMBEDDERS: "2"
-      # Max in-flight requests for local testing (use higher value for production)
+      # Documented in older drafts; not enforced by current http.rs
       TURBOLOG_MAX_INFLIGHT: "200"
-      # Auth token (leave empty for unauthenticated mode)
       TURBOLOG_AUTH_TOKEN: "${TURBOLOG_AUTH_TOKEN:-}"
 
     volumes:
-      # Persist WAL + index snapshots
       - turbolog-data:/data
-      # Model files — mount host's ./models/ directory as read-only
-      # Container will start without files but embedding will fail
       - ./models:/models:ro
 
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8087/health"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-      start_period: 30s
+    # Do not enable until GET /health exists:
+    # healthcheck:
+    #   test: ["CMD", "curl", "-f", "http://localhost:8087/health"]
+    #   interval: 15s
+    #   timeout: 5s
+    #   retries: 3
+    #   start_period: 30s
 
-    # Run as non-root
     user: "10001:10001"
-
-    # Read-only root filesystem
     read_only: true
     tmpfs:
       - /tmp:size=64m
 
-    # Resource limits (based on local environment; adjust as needed)
     deploy:
       resources:
         limits:

@@ -13,14 +13,17 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
-    /// Run the HTTP server daemon
+    /// Run the experimental HTTP server daemon (requires `--features server`)
     Serve,
     /// Read stdin line-by-line and stream anomaly results with color highlighting
     Watch {
-        /// Anomaly score floor override (default: auto-calibrated from data)
+        /// Novelty distance threshold override.
+        /// Score = Euclidean distance from calibrated centroids, not probability.
+        /// Default auto threshold is median + 3·MAD with floor 0.10.
         #[arg(long)]
         threshold: Option<f32>,
-        /// Explain anomalies using a local LLM (auto-detects Ollama or LM Studio)
+        /// Optionally explain anomalies using a local LLM.
+        /// Ignored/no-op when no local LLM is reachable.
         #[arg(long)]
         explain: bool,
         /// Local LLM base URL (e.g. http://localhost:11434). Overrides auto-detect.
@@ -43,11 +46,13 @@ pub enum Command {
         /// Output format: "text" (default) or "json"
         #[arg(long, default_value = "text")]
         format: String,
-        /// Anomaly score threshold override (default: auto-calibrated from data).
-        /// Use this to tune sensitivity on small or low-cardinality inputs.
+        /// Novelty distance threshold override.
+        /// Score = Euclidean distance from calibrated centroids, not probability.
+        /// Default auto threshold is median + 3·MAD with floor 0.10.
         #[arg(long)]
         threshold: Option<f32>,
-        /// Explain top anomalies using a local LLM (auto-detects Ollama or LM Studio)
+        /// Optionally explain top anomalies using a local LLM.
+        /// Ignored/no-op when no local LLM is reachable.
         #[arg(long)]
         explain: bool,
         /// Local LLM base URL. Overrides auto-detect. Also: TURBOLOG_LLM_URL
@@ -74,8 +79,11 @@ pub enum Command {
         /// Maximum number of rows to show (default: 50)
         #[arg(long, default_value = "50")]
         limit: usize,
+        /// Group entries by recurring template
+        #[arg(long)]
+        recurring: bool,
     },
-    /// Real-time TUI dashboard connecting to a running TurboLog server
+    /// Experimental TUI dashboard (requires `--features tui`)
     Ui {
         /// TurboLog server URL
         #[arg(long, default_value = "http://localhost:8087")]

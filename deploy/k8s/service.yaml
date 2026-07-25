@@ -1,7 +1,6 @@
 ---
-# TurboLog Service — ClusterIP
-# Accessible only within the cluster. External exposure is configured separately via Ingress/LoadBalancer.
-# TLS termination is handled by Ingress or external LB, and the app communicates via plain HTTP.
+# EXPERIMENTAL — ClusterIP for local/cluster experiments with `serve`.
+# Do not scrape /metrics until that route exists (it does not today).
 apiVersion: v1
 kind: Service
 metadata:
@@ -9,12 +8,8 @@ metadata:
   namespace: turbolog
   labels:
     app.kubernetes.io/name: turbolog
-    app.kubernetes.io/component: engine
-  annotations:
-    # When using annotation-based scraping without Prometheus ServiceMonitor
-    prometheus.io/scrape: "true"
-    prometheus.io/port: "8087"
-    prometheus.io/path: "/metrics"
+    app.kubernetes.io/component: engine-experimental
+  annotations: {}
 spec:
   type: ClusterIP
   selector:

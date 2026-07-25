@@ -6,7 +6,8 @@
 //! ## Sharded Write Path
 //! Writes are distributed across N independent shards by `id % N`. Each shard owns its own
 //! WAL file (`wal-{i}.bin`), PingPongIndexer, and ring buffer, eliminating the single global
-//! write lock and allowing 1 M concurrent connections without contention.
+//! write lock bottleneck on a single node. This engine backs the **experimental** `serve`
+//! feature — not a multi-replica “1M connections” product (see `tasks/todo.md`).
 //!
 //! ## Lock Order Invariants
 //! Within each shard the `wal` Mutex is the single serialization point (WAL append + indexer

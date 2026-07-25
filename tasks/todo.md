@@ -1,94 +1,116 @@
-# TurboLog — Phase 4: Production Hardening (1M Concurrent Connections)
+# TurboLog — Roadmap (CLI-first)
 
-> Goal: Production-level readiness for active use in a 1M concurrent connection service.
-> Strategy: Freeze shared contracts (metrics API) → Parallelize 4 workstreams with non-overlapping file ownership (sonnet) → Integration and validation.
+> **Product north star:** a local terminal log triage tool.
+> Pipe logs in → highlight novel / anomalous lines → optionally explain with a local LLM.
+>
+> **Not the north star:** a horizontally scaled observability platform, Datadog substitute,
+> or “1M concurrent connections” service. Those paths fight the architecture (frozen
+> calibration, stateful in-memory index) and the maintainer budget.
 
-## Diagnostics (Bottleneck Priority)
-- **P0 Throughput**: `wal: Mutex<Wal>` single global write lock serializes all ingestion → Sharding.
-- **P0 Observability**: Missing Prometheus/health/ready → Cannot operate.
-- **P1 Resilience**: Missing backpressure/timeout/graceful shutdown.
-- **P1 Deployment**: Missing Docker/k8s/HPA (1M = N replicas horizontal scaling).
-- **P2 Validation**: Missing criterion bench and SLO documentation.
+## Positioning rules (do not violate without an explicit decision)
 
-## Contract Freeze (Prerequisite, I will do this)
-- [ ] `src/metrics.rs` — Process-global Prometheus text exposition (0 dependencies). Called by all agents.
-- [ ] `Cargo.toml` — signal-hook, criterion(dev)+`[[bench]]`, `[profile.release]` lto.
-- [ ] `src/lib.rs` — `pub mod metrics;` declaration.
-
-## WS1 — Sharded Ingestion Engine (engine.rs, index.rs, wal.rs)
-- [ ] N Shards: Per-shard `Wal` + `PingPongIndexer` (Remove global lock)
-- [ ] Per-shard swap_tick / Multi-shard crash recovery / Search N-shards x ring merge
-- [ ] Public API (open/ingest_log/search_text/swap_tick/sweep_chunks/stats) remains unchanged
-- [ ] Metrics instrumentation: ingest count/latency, anomaly
-- [ ] Keep all existing 19 tests green
-
-## WS3 — HTTP Edge Resilience (http.rs)
-- [ ] `/health`(liveness), `/ready`(readiness), `/metrics`(Prometheus)
-- [ ] Inflight backpressure (503 when exceeded) + Request body read timeout
-- [ ] Introduce `ServerConfig` (addr/workers/auth/max_inflight/shutdown)
-- [ ] Request metrics instrumentation (2xx/4xx/5xx/rejected/inflight)
-
-## WS4 — Deployment & Operations (New files only)
-- [x] Multi-stage `Dockerfile` (non-root, distroless/slim) + `.dockerignore` (Translated Korean comments to English)
-- [ ] `deploy/k8s/`: Deployment/Service/HPA/PDB/ConfigMap (probe→/ready,/health)
-- [ ] `deploy/docker-compose.yml` + `docs/OPERATIONS.md` (1M horizontal scaling topology, TLS@ingress)
-
-## WS5 — Benchmark & SLO (Mainly new files)
-- [ ] `benches/throughput.rs` criterion (Model-independent: parse/cache/detect/fnv)
-- [ ] `examples/loadtest.rs` Add multi-thread contention ingestion measurement
-- [ ] `docs/SLO.md`: Latency/throughput goals + Measurement results
-
-## Integration & Validation (Depends on prerequisites, I will do this)
-- [ ] Align run_server call sites (main.rs/loadtest) + SIGTERM graceful shutdown
-- [ ] `cargo build/test/clippy` green + loadtest demonstration
-- [ ] Update tasks/lessons.md
+1. **Primary surface** = `watch` / `scan` / `history` (+ optional `--explain`).
+2. **`serve` / `ui` / k8s** = experimental power-user features, behind Cargo features / docs
+   labeled *experimental*. Never marketed as production-ready until probes, backpressure,
+   and graceful shutdown actually exist in code.
+3. Prefer vertical niches that fit the pipe UX over generic “AI log platform” claims:
+   - **Now:** live `tail -f` / `docker logs` triage while developing a service.
+   - **Next:** CI/CD failure-log scan + summary.
+   - **Later (only if CLI is used):** single-host sidecar — not a cluster control plane.
 
 ---
 
-# TurboLog — Phase 1 Checklist
+## Now — Ship a trustworthy CLI (P0)
 
-## Scaffold
-- [x] Directory structure + git init
-- [x] Cargo.toml dependencies (turbovec, drain-rs, lru, ort, tokenizers, arc-swap, anyhow)
-- [x] .gitignore (/target, /models)
-- [x] scripts/download_model.sh (all-MiniLM-L6-v2 ONNX + tokenizer.json)
+### First-run & install UX
+- [x] Document that default `cargo install turbolog` is CLI-only (`embedded-model`);
+      `server` and `tui` need `--features`
+- [ ] Improve first-run model story (binary size / download progress / offline flag) so
+      “just pipe” is actually true on a clean machine
+- [x] Keep release binaries in GitHub Releases as the no-Rust path; verify README links
 
-## Phase 1: Core Bindings & Cache (src/ingest.rs)
-- [x] ParsedLog struct
-- [x] TemplateParser (drain-rs wrapper, template_id = FNV-1a template hash)
-- [x] Embedder (ort Session + tokenizers, mean pooling + L2 norm)
-- [x] VectorCache (LruCache<u64, Arc<[f32]>>, capacity 10,000, hit/miss counters)
+### Detection quality for triage (not “AI ops”)
+- [ ] Surface calibration state clearly (`watch`: calibrating → ready; `scan`: small-input rules)
+- [ ] Make `--threshold` and auto threshold understandable in help text / docs
+      (score = novelty distance, not probability)
+- [x] Reduce false novelty on known-benign bursts where cheap heuristics help
+      (e.g. repeated identical templates after calibration)
+- [ ] Persist / show recurring patterns via `history` so repeat anomalies are actionable
 
-## Skeleton (No implementation, types only)
-- [x] detect.rs — DetectionResult, AnomalyDetector (Calibrated with IdMapIndex)
-- [x] index.rs — PingPongIndexer (Calibrated with arc-swap)
-- [x] lib.rs module connections
+### Explain as optional garnish
+- [x] Keep `--explain` a no-op when no LLM is found (already true) — never imply it is required
+- [ ] Improve history context line for recurring templates (roadmap item below)
+- [x] Document the 30s timeout story for slow LLM calls
+- [ ] Consider async/non-blocking explain later
 
-## Validation
-- [x] Unit tests: Template ID stability, Cache hit/miss — 3 passed
-- [x] Integration tests: 100 synthetic logs → 384-dimensional L2≈1.0, hit rate 95.0% (hits=95, misses=5)
-- [x] cargo build no warnings + cargo test all passed (5/5)
-- [x] README.md + initial commit
-- [x] Establish GitHub Actions advanced CI pipeline (Lint, Matrix OS tests, Security Audit, Code Coverage)
+### Docs hygiene (this pass)
+- [x] Rewrite `tasks/todo.md` around CLI-first direction
+- [x] Align README, CONTRIBUTING, OPERATIONS, SLO with the same north star
+- [x] Mark `deploy/` as experimental; stop claiming 1M / production k8s readiness
+- [x] Add `deploy/README.md`; disable k8s/compose probes that target missing routes
 
-## Phase 2: Ping-Pong & Centroid
-- [x] Implement PingPongIndexer (Write Mutex + ArcSwap snapshot read, swap_and_flush)
-- [x] Backup sealed window .tvim chunks (flush_path) + load round-trip validation
-- [x] AnomalyDetector Tier 1 (Fixed centroid Euclidean distance, fit = frozen after 1 K-means)
-- [x] Tier 2 IdMapIndex deep search + allowlist filter (includes panic guard)
-- [x] Concurrency testing (ingest/search/swap 3-threads) + E2E log anomaly detection test
-- [x] 12/12 tests passed
+---
 
-## Phase 3: Persistence & API
-- [x] WAL disaster recovery (wal.rs — append/rotate/replay, ignore incomplete tails, crash recovery test)
-- [x] Time chunk management (chunks.rs — hour-N directory, OS unlink sweep upon expiration)
-- [x] Engine assembly (engine.rs — WAL→Indexing serialization, ring merge search, freeze after auto-calibration)
-- [x] HTTP API (http.rs — POST /logs, POST /search, GET /stats, tiny_http worker pool)
-- [x] Server daemon (main.rs — 10-second swap tick + 1-hour sweep, env config)
-- [x] 19/19 tests passed + release binary smoke run (swap daemon, search, chunks, WAL rotate demonstration)
+## Next — Vertical wedge (P1)
 
-## Future (Improvement candidates outside of spec)
-- [ ] gRPC interface (Spec parallel item — added on top of the same engine if needed)
-- [ ] History search targeting disk segments (Timeframes exceeding ring scope)
-- [x] Separate embedder pool (§4.3 Phase 1 — In-process pool, TURBOLOG_EMBEDDERS)
-- [ ] Stateless Embedder horizontal scaling (§4.3 Final Form — Worker process separate deployment)
+### Developer live triage
+- [ ] Short “recipes” in README: docker logs, journalctl, kubectl logs (single pod),
+      app `tee` pipelines
+- [ ] Exit codes + `--only-anomalies` / `--quiet` remain script-friendly (CI hooks)
+
+### CI failure-log assistant
+- [ ] `turbolog scan --format json` examples for GitHub Actions / other CI
+- [ ] Optional `turbolog diagnose` (time-window / top anomalies / recurring badge) —
+      land on `main` only when the feature actually merges and stays
+- [ ] History-aware explanation context (recurring pattern detection)
+
+### Shell & editor adjacency (only after the above sticks)
+- [ ] Completions already shipped — keep them green in CI
+- [ ] VS Code / Neovim extension — **deferred** until CLI has real external users
+
+---
+
+## Later / experimental — Server path (P2, explicit demotion)
+
+> Build only when CLI usage creates a concrete need to daemonize *one host or one stream*.
+> Do **not** resume “1M concurrent” planning as a goal.
+
+### Honest status of current server stack
+- [x] Engine sharding, WAL, embedder pool, metrics *module* exist in-tree
+- [ ] `/health`, `/ready`, `/metrics` HTTP routes — **not implemented** (k8s probes will fail)
+- [ ] Inflight backpressure / `TURBOLOG_MAX_INFLIGHT` — **documented but not wired in `http.rs`**
+- [ ] Graceful SIGTERM shutdown — **not implemented**
+- [ ] `deploy/k8s` — placeholders (example.com images, stub model-init)
+
+### If/when server is revived (minimum bar before removing *experimental*)
+- [ ] Implement `/health`, `/ready`, `/metrics` and wire `metrics.rs`
+- [ ] Backpressure + body read timeout + `ServerConfig`
+- [ ] Graceful shutdown + swap_tick flush
+- [ ] Single-node docker-compose path that actually healthchecks
+- [ ] Docs that say “single-node / trusted network”, never “1M connections”
+
+### Explicitly out of scope (until revisited)
+- [ ] gRPC interface
+- [ ] Stateless embedder worker fleet
+- [ ] Multi-replica consistent-hash topology as a supported product
+- [ ] Competing with hosted observability platforms
+
+---
+
+## Done — Historical phases (reference only)
+
+Kept for archaeology. Do not treat unchecked Phase-4 “1M” items as active work.
+
+### Scaffold / Phase 1–3 (complete)
+- [x] Core Drain + ONNX MiniLM + LRU cache
+- [x] K-means Tier-1 detector + Tier-2 turbovec path (server)
+- [x] WAL / chunks / engine / HTTP skeleton
+- [x] Pipe CLI: `watch`, `scan`, `--explain`, `history`
+- [x] Embedded model + crates.io publish path
+- [x] TUI (`--features tui`), server feature gate (`--features server`)
+- [x] CI: fmt, clippy, cargo-deny, nextest, coverage, release workflow
+
+### Former “Phase 4: 1M Concurrent Connections” — superseded
+Sharding, metrics registry, docker/k8s *skeletons*, benches, and SLO *numbers* landed in
+various forms, but the **product goal is retired**. Remaining HTTP/ops gaps belong under
+“Later / experimental” above, not under a 1M scale narrative.

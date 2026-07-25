@@ -4,6 +4,7 @@
 //! but without WAL, indexing, or concurrency — suitable for piped stdin processing.
 
 use anyhow::Result;
+use std::collections::HashSet;
 
 use crate::detect::AnomalyDetector;
 use crate::ingest::{Embedder, VectorCache};
@@ -47,9 +48,20 @@ pub struct LocalPipeline {
     /// Number of distinct templates seen so far (caps at CALIBRATION_TEMPLATES).
     calibration_count: usize,
     threshold_override: Option<f32>,
-    seen_templates: std::collections::HashSet<String>,
+    seen_templates: HashSet<String>,
+    /// Templates that have already received loud anomaly treatment in this session.
+    reported_anomaly_templates: HashSet<String>,
     /// Lines processed while still uncalibrated — drives the line-budget fallback.
     lines_seen: usize,
+}
+
+fn reportable_anomaly(
+    reported_templates: &mut HashSet<String>,
+    template: &str,
+    score: f32,
+    threshold: f32,
+) -> bool {
+    score > threshold && reported_templates.insert(template.to_string())
 }
 
 impl LocalPipeline {
@@ -60,7 +72,8 @@ impl LocalPipeline {
             calibration_buf: Vec::new(),
             calibration_count: 0,
             threshold_override,
-            seen_templates: std::collections::HashSet::new(),
+            seen_templates: HashSet::new(),
+            reported_anomaly_templates: HashSet::new(),
             lines_seen: 0,
         }
     }
@@ -105,7 +118,12 @@ impl LocalPipeline {
         let threshold = self
             .threshold_override
             .unwrap_or_else(|| detector.threshold());
-        let is_anomaly = score > threshold;
+        let is_anomaly = reportable_anomaly(
+            &mut self.reported_anomaly_templates,
+            &parsed.template,
+            score,
+            threshold,
+        );
 
         Ok(LineResult {
             template: parsed.template,
@@ -146,10 +164,16 @@ impl LocalPipeline {
         let threshold = self
             .threshold_override
             .unwrap_or_else(|| detector.threshold());
+        let is_anomaly = reportable_anomaly(
+            &mut self.reported_anomaly_templates,
+            template,
+            score,
+            threshold,
+        );
         Ok(Some(LineResult {
             template: template.to_string(),
             score: Some(score),
-            is_anomaly: score > threshold,
+            is_anomaly,
         }))
     }
 
@@ -157,7 +181,80 @@ impl LocalPipeline {
         self.detector.is_some()
     }
 
+    pub fn effective_threshold(&self) -> Option<f32> {
+        self.detector.as_ref().map(|detector| {
+            self.threshold_override
+                .unwrap_or_else(|| detector.threshold())
+        })
+    }
+
     pub fn calibration_progress(&self) -> usize {
         self.calibration_count
+    }
+
+    pub fn calibration_target(&self) -> usize {
+        CALIBRATION_TEMPLATES
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn repeated_high_score_template_is_suppressed_after_first_report() {
+        let mut reported_templates = HashSet::new();
+
+        assert!(
+            reportable_anomaly(
+                &mut reported_templates,
+                "fatal panic in worker <*>",
+                1.0,
+                0.5
+            ),
+            "first high-score template should be reported"
+        );
+        assert!(
+            !reportable_anomaly(
+                &mut reported_templates,
+                "fatal panic in worker <*>",
+                1.0,
+                0.5
+            ),
+            "immediate repeat of the same high-score template should be suppressed"
+        );
+        assert!(
+            reportable_anomaly(
+                &mut reported_templates,
+                "database timeout on shard <*>",
+                1.0,
+                0.5
+            ),
+            "a different novel high-score template should still be reported"
+        );
+    }
+
+    #[test]
+    fn below_threshold_template_does_not_consume_future_anomaly_report() {
+        let mut reported_templates = HashSet::new();
+
+        assert!(
+            !reportable_anomaly(
+                &mut reported_templates,
+                "cache warmer completed <*>",
+                0.2,
+                0.5
+            ),
+            "below-threshold lines should remain normal"
+        );
+        assert!(
+            reportable_anomaly(
+                &mut reported_templates,
+                "cache warmer completed <*>",
+                0.8,
+                0.5
+            ),
+            "a later high-score occurrence should still get the first anomaly report"
+        );
     }
 }

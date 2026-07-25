@@ -1,8 +1,8 @@
-//! TurboLog — Ultralight time-series log vector engine.
+//! TurboLog — local-first log triage (CLI) with an optional experimental HTTP engine.
 //!
-//! Index thousands of log streams per second in real-time and detect anomalies
-//! without high-cost GPUs or heavy vector databases. Data flow:
-//! Ingest → Parse(Drain) → Embed(Cache/ONNX) → Tier 1/2 Detection → Ping-Pong Indexing → Flush
+//! Primary surface: pipe CLI (`watch` / `scan` / `history`) over Drain → MiniLM → novelty score.
+//! Optional `--features server` stack: Ingest → Parse → Embed → Tier 1/2 → Ping-Pong index → WAL.
+//! Product scope: `tasks/todo.md` (CLI-first; not a fleet observability platform).
 
 #[cfg(feature = "server")]
 pub mod chunks;

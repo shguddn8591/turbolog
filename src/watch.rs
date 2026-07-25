@@ -23,6 +23,11 @@ pub struct WatchStats {
     pub anomaly_count: u64,
 }
 
+struct CalibrationDisplay {
+    progress: usize,
+    target: usize,
+}
+
 pub fn run_watch(
     pipeline: &mut LocalPipeline,
     llm: Option<&LlmClient>,
@@ -50,12 +55,23 @@ pub fn run_watch(
                 if result.is_anomaly {
                     stats.anomaly_count += 1;
                 }
-                handle_result(&line, &result, use_color, llm, history, &opts);
+                handle_result(
+                    &line,
+                    &result,
+                    CalibrationDisplay {
+                        progress: pipeline.calibration_progress(),
+                        target: pipeline.calibration_target(),
+                    },
+                    use_color,
+                    llm,
+                    history,
+                    &opts,
+                );
             }
             Err(e) => eprintln!("turbolog: embedding error: {e}"),
         }
         if !opts.quiet && !was_calibrated && pipeline.calibrated() {
-            print_calibration_complete(use_color);
+            print_calibration_complete(use_color, pipeline.effective_threshold());
         }
     }
 
@@ -65,6 +81,7 @@ pub fn run_watch(
 fn handle_result(
     line: &str,
     result: &LineResult,
+    calibration: CalibrationDisplay,
     color: bool,
     llm: Option<&LlmClient>,
     history: Option<&HistoryStore>,
@@ -78,25 +95,21 @@ fn handle_result(
             println!("[ANOMALY {score:.2}] {line}");
         }
 
+        let ctx = history.and_then(|h| h.context_for(&result.template));
+        if let Some(context) = ctx.as_deref() {
+            print_context(context, color);
+        }
+
         if let Some(client) = llm {
-            let ctx = history.and_then(|h| h.context_for(&result.template));
             match client.explain(line, score, ctx.as_deref()) {
                 Some(explanation) => {
-                    if color {
-                        println!("  {CYAN}└─ {explanation}{RESET}");
-                    } else {
-                        println!("  └─ {explanation}");
-                    }
+                    print_explanation(&explanation, ctx.is_some(), color);
                     if let Some(h) = history {
                         let _ = h.insert(&result.template, line, score, Some(&explanation));
                     }
                 }
                 None => {
-                    if color {
-                        println!("  {DIM}└─ (LLM explanation unavailable){RESET}");
-                    } else {
-                        println!("  └─ (LLM explanation unavailable)");
-                    }
+                    print_unavailable(ctx.is_some(), color);
                     if let Some(h) = history {
                         let _ = h.insert(&result.template, line, score, None);
                     }
@@ -109,21 +122,62 @@ fn handle_result(
         if opts.only_anomalies {
             return;
         }
+        if opts.quiet {
+            println!("{line}");
+            return;
+        }
         if color {
-            println!("{DIM}[calibrating]{RESET} {line}");
+            println!(
+                "{DIM}[calibrating {}/{}]{RESET} {line}",
+                calibration.progress, calibration.target
+            );
         } else {
-            println!("[calibrating] {line}");
+            println!(
+                "[calibrating {}/{}] {line}",
+                calibration.progress, calibration.target
+            );
         }
     } else if !opts.only_anomalies {
         println!("{line}");
     }
 }
 
-/// Prints a one-time status line to stderr when calibration completes.
-pub fn print_calibration_complete(use_color: bool) {
-    if use_color {
-        eprintln!("{YELLOW}[turbolog] calibration complete — anomaly detection active{RESET}");
+fn print_context(context: &str, color: bool) {
+    if color {
+        println!("  {CYAN}└─ Context: {context}{RESET}");
     } else {
-        eprintln!("[turbolog] calibration complete — anomaly detection active");
+        println!("  └─ Context: {context}");
+    }
+}
+
+fn print_explanation(explanation: &str, has_context: bool, color: bool) {
+    let prefix = if has_context { "     " } else { "  └─ " };
+    if color {
+        println!("{prefix}{CYAN}{explanation}{RESET}");
+    } else {
+        println!("{prefix}{explanation}");
+    }
+}
+
+fn print_unavailable(has_context: bool, color: bool) {
+    let prefix = if has_context { "     " } else { "  └─ " };
+    if color {
+        println!("{prefix}{DIM}(LLM explanation unavailable){RESET}");
+    } else {
+        println!("{prefix}(LLM explanation unavailable)");
+    }
+}
+
+/// Prints a one-time status line to stderr when calibration completes.
+pub fn print_calibration_complete(use_color: bool, threshold: Option<f32>) {
+    let suffix = threshold
+        .map(|value| format!(" (threshold={value:.3})"))
+        .unwrap_or_default();
+    if use_color {
+        eprintln!(
+            "{YELLOW}[turbolog] calibration complete — anomaly detection active{suffix}{RESET}"
+        );
+    } else {
+        eprintln!("[turbolog] calibration complete — anomaly detection active{suffix}");
     }
 }
